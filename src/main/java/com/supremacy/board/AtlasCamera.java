@@ -5,7 +5,7 @@ import com.badlogic.gdx.math.Vector2;
 
 /** Flat, top-down map transform. Rotation and perspective are intentionally absent. */
 public final class AtlasCamera {
-    public static final float X = 28, Y = 134, WIDTH = 1216, HEIGHT = 730;
+    public static final float X = 0, Y = 268, WIDTH = 1600, HEIGHT = 676;
     public static final float BASE_SCALE = WIDTH / 1800f;
     public float centerX = 900, centerY = 375, zoom = 1;
     public float scale() { return BASE_SCALE * zoom; }

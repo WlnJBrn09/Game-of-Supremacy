@@ -9,7 +9,7 @@
 
 ## Automated rules checks
 
-**25 tests pass:** five board tests, sixteen game tests and four bot-strategy tests. Bot coverage checks exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritizing continent completion, reinforcement batching and persistent objectives. The full-match test runs three seeds at each of the six difficulties (18 completed matches).
+**26 tests pass:** five board tests, seventeen game tests and four bot-strategy tests. Bot coverage checks exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritizing continent completion, reinforcement batching and persistent objectives. The full-match test runs three seeds at each of the six difficulties (18 completed matches).
 
 Coverage includes the 71-territory geography and requested custom assignments; connected/symmetric topology; polygon triangulation and hit testing; fixed overhead camera; five-player random setup and 55 armies each; population income; defending ties; conquest/occupation/world victory; repeated fortification and open-border transit; escalating sets and matched-land bonuses; elimination cards and forced trade/deployment; immediate offers, stale offers and counteroffers; garrison redistribution and army conservation; movement history after trades; autosave, random-state preservation, backup recovery and pending occupation; and seeded complete bot matches reaching world conquest at all six difficulties.
 
@@ -22,6 +22,10 @@ Exercised the actual libGDX desktop game under Xvfb/Mesa using keyboard/pointer 
 - Quiet bot turns and the next human's report/handover.
 - Resuming an autosave, rolling a real battle, occupying captured land, advancing to a second human and checking that their private cards are separated by the handover screen.
 - The map uses the existing orthographic pan/zoom transform; Android adds two-finger pinch zoom.
+
+The console redesign (game-piece army tokens, phase track, roster, slider placement, blitz, win chance, dice results, card faces, continent panel and victory screen) was checked the same way with a seeded match (`-Dsupremacy.seed=42`): seat/skill selection, initial placement with the slider, automatic advance to Attack, auto-picked attack source, single rolls and blitz, occupation, continuing the attack from captured land, fortifying, ending the turn, the next turn's loss summary, cards, diplomacy, log, pause menu, a two-human handover and a forged near-victory save played through to world conquest.
+
+The Android SDK could not be downloaded in the environment used for the redesign, so `downloads/GameOfSupremacy-debug.apk` was **not** rebuilt and still contains the previous interface. Rebuild it with `./gradlew :core:test :android:assembleDebug`.
 
 `game-preview.png`, `diplomacy-preview.png` and `handover-preview.png` are screenshots from that shared desktop runtime. They are not Android-device screenshots.
 

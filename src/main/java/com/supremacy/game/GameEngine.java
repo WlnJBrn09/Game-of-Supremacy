@@ -153,6 +153,13 @@ public final class GameEngine {
         && adjacent(from, to);
   }
 
+  /** Chance that attacking with every spare army eventually conquers {@code to}. */
+  public double conquestChance(int from, int to) {
+    region(from);
+    region(to);
+    return BattleOdds.win(state.armies[from] - 1, state.armies[to]);
+  }
+
   public void deploy(int r, long amount) {
     check(state.phase == SETUP || state.phase == REINFORCE, "Not a deployment phase");
     own(r);

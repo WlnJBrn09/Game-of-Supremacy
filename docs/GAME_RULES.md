@@ -9,7 +9,7 @@ World conquest wins. Every territory and army count is public. Card faces are pr
 ## Turn sequence
 
 1. **Reinforce:** receive `max(3, floor(territories / 3)) + continent bonuses + floor(on-board armies / 5)`. Population is counted once at the start of the turn, before card trades and deployment. Deploy all reserve armies before attacking.
-2. **Attack:** select your source and an adjacent enemy, including connected sea neighbours. Roll one battle at a time with one to three attack dice, limited by armies available after leaving one behind. Defence automatically uses up to two dice. Compare highest against highest, then second highest if available; ties favour defence. Stop attacking whenever you choose.
+2. **Attack:** select your source and an adjacent enemy, including connected sea neighbours. Roll one battle at a time with one to three attack dice, limited by armies available after leaving one behind. **Blitz** repeats maximum-dice rolls until the territory falls or only one attacker remains; it uses exactly the same engine command and dice as individual rolls. Defence automatically uses up to two dice. Compare highest against highest, then second highest if available; ties favour defence. Stop attacking whenever you choose.
 3. **Occupy:** after conquest, move at least the number of attacking dice into the captured territory, leaving at least one behind. The exact roll and pending occupation are saved before any animation.
 4. **Fortify:** make as many transfers as desired between territories connected through friendly land or agreed open borders, including sea connections. Leave one behind. Each individual army may be transferred only once during this phase; arrivals cannot be forwarded again.
 5. **End turn:** if you captured at least one territory, draw exactly one card. Elimination transfers only the eliminated player's cards, without an extra army reward.
@@ -30,7 +30,7 @@ Armies use checked 64-bit counts without an artificial gameplay cap. The 20% pop
 
 ## Cards
 
-There is one territory card per territory and two wilds. A/B/C are the three card symbols; the map always uses numbered circles rather than soldier, horse or tank pieces. Valid sets are three of one symbol, or one of each; wilds substitute for either. Trade values increase globally: **4, 6, 8, 10, 12, 15, then +5** per subsequent set. If the set includes an owned territory, the first matching card receives two extra armies on that territory.
+There is one territory card per territory and two wilds. The three card symbols are infantry, cavalry and artillery; on the map, armies are shown as numbered tokens in each player's colour rather than individual pieces. Valid sets are three of one symbol, or one of each; wilds substitute for either. Trade values increase globally: **4, 6, 8, 10, 12, 15, then +5** per subsequent set. If the set includes an owned territory, the first matching card receives two extra armies on that territory.
 
 Trade sets during reinforcement. Holding five or more cards prevents leaving that phase. Reaching six or more by elimination interrupts attacks for mandatory trading and deployment; it does not grant another regular turn income.
 

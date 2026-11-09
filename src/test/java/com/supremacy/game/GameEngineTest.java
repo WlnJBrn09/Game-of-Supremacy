@@ -378,4 +378,18 @@ class GameEngineTest {
       }
     }
   }
+
+  @Test
+  void conquestChanceReflectsBothStacksWithoutUsingRandomness() {
+    GameEngine g = game();
+    finishSetup(g);
+    assign(g, "Brazil", 0, 2);
+    assign(g, "Peru", 1, 5);
+    long rng = g.state.rng;
+    double weak = g.conquestChance(g.index("Brazil"), g.index("Peru"));
+    g.state.armies[g.index("Brazil")] = 30;
+    double strong = g.conquestChance(g.index("Brazil"), g.index("Peru"));
+    assertTrue(weak < .05 && strong > .95 && strong <= 1, weak + " " + strong);
+    assertEquals(rng, g.state.rng);
+  }
 }
