@@ -1,49 +1,75 @@
 # Game of Supremacy
 
-An **offline Android conquest game in Java/libGDX**, built around a custom 71-territory world board. Play with exactly five participants: one to five humans sharing a device, filled out by Charles, George, Douglas and Dan.
-
-The board stays directly overhead. Armies are numbered circles in player colours. Matches include random territories, 55 starting armies per player, Risk dice and escalating cards, world conquest, private hands, automatic saves, asynchronous trade offers, adjacent army gifts and open borders. Six shared AI difficulties use persistent objectives and progressively deeper planning; bot turns are summarized at the next human turn.
+An offline, five-player world-conquest game for Android, written in Java with libGDX. It plays on a custom 71-territory world board with Risk-style dice and cards, plus asynchronous diplomacy.
 
 ![Game screen](docs/game-preview.png)
 
-See [the full rules and chosen defaults](docs/GAME_RULES.md), [territory groupings](docs/TERRITORIES.md), and [verification](docs/VERIFICATION.md).
+## Highlights
 
-## Install on Android
+- **Five players, always.** One to five humans share a device (pass-and-play). Charles, George, Douglas and Dan fill the remaining seats.
+- **Six bot difficulties:** Beginner, Easy, Medium, Hard, MegaHard and TeraHard. Higher levels plan deeper; none get extra armies or loaded dice.
+- **Custom board:** seven continents, 112 land connections, 34 sea lanes and sea lanes across the Pacific, generated from Natural Earth data.
+- **Diplomacy:** territory swaps, adjacent army gifts and open borders, with counteroffers.
+- **Private hands:** a handover screen hides cards between human turns.
+- **Autosave** after every action, with backup recovery.
+- **Fully offline.** No Internet permission, and all map, font and audio assets are bundled.
 
-Download [GameOfSupremacy-debug.apk](downloads/GameOfSupremacy-debug.apk) from this branch and open it on **Android 8.0 or newer**. Allow installation from the browser/file manager when Android asks. This is a debug-signed build for direct installation. It contains ARMv7, ARM64 and x86-64 native libraries, works offline, and requests no Internet permission. Landscape orientation is enforced. All map, font and audio assets are bundled.
+## Play
 
-## Build the APK
+### Install the Android build
 
-Use JDK 17 or 21 and an Android SDK with platform 35 and build tools 35.0.0. Set `ANDROID_HOME` or set `sdk.dir` in an untracked `local.properties`. The wrapper downloads Gradle 8.9; Android Gradle Plugin 8.7.3 is pinned.
+Download [`downloads/GameOfSupremacy-debug.apk`](downloads/GameOfSupremacy-debug.apk) and open it on a device running **Android 8.0 (API 26) or newer**. Allow installs from your browser or file manager when prompted. This is a debug-signed build for direct installation, not a Play Store release. See [`downloads/README.md`](downloads/README.md) for how to check its SHA-256.
 
-```sh
-./gradlew :core:test :android:assembleDebug
-# APK: android/build/outputs/apk/debug/android-debug.apk
-```
+### Run on desktop
 
-On Windows use `gradlew.bat`. Android Studio can open this directory directly. The Android launcher lives in `android/`; `core/` compiles the shared Java source and rules tests. Java 17 APIs are desugared for older Android versions.
-
-## Desktop development
-
-A desktop launcher remains available for development and automated interaction checks:
-
-```sh
+```bash
 ./mvnw clean verify
 java -jar target/supremacy-game-0.2.0.jar
 ```
 
-On macOS add `-XstartOnFirstThread` to the Java command. On Windows use `mvnw.cmd`. Desktop data defaults to `~/.supremacy`; `-Dsupremacy.saveDir=/path/to/test-data` isolates saves and preferences for tests. `-Dsupremacy.noAudio=true` disables desktop audio initialization on machines without an audio device.
+On macOS add `-XstartOnFirstThread` to the `java` command. On Windows use `mvnw.cmd`.
 
-## Playing
+### How a match works
 
-Choose the number of humans and one shared bot difficulty, then start a match. During setup, tap one of your territories (or use **Choose territory**), set an amount and deploy. Place the entire reserve, then finish setup. A handover screen identifies the next human.
+Choose the number of humans and one shared bot difficulty, then start. During setup, deploy your 55 starting armies. Each turn then runs Reinforce → Attack → Occupy → Fortify → End turn. Tap your territory, then an adjacent enemy, to attack. Pinch or use the zoom buttons to zoom, and drag to pan.
 
-Each turn proceeds through **Reinforce → Attack → Occupy captured land → Fortify → End turn**. Tap your territory and an adjacent enemy to attack. Each roll is a separate decision; defending dice are automatic. During fortification, tap a source and destination; use Choose territory to reset the source. Pinch or use the zoom buttons to zoom, and drag to pan. Private cards, reports, diplomacy and rules are available from the top controls. The app saves every action and hides private cards when paused.
+Full rules, defaults and bot behaviour are in [`docs/GAME_RULES.md`](docs/GAME_RULES.md). Territory groupings are in [`docs/TERRITORIES.md`](docs/TERRITORIES.md).
 
-## Geography and implementation
+## Developing
 
-Seven continents: North America, South America, Europe, Africa, Asia, Australia and Middle-East. The board retains the requested revisions: Yakutsk and Irkutsk; Belgium with France; Tanzania with Ethiopia; Tasmania with Victoria; Chad divided among Mali, Egypt and Ethiopia; northern Mauritania with Algeria. It has 112 land connections and 34 sea lanes, with original nautical decoration and Pacific wrapping.
+| Document | Contents |
+| --- | --- |
+| [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Prerequisites, build and test commands, system properties, regenerating the board, release checklist |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Module layout, class responsibilities, engine and save invariants |
+| [`docs/VERIFICATION.md`](docs/VERIFICATION.md) | What has been tested, and what has not |
+| [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) | Data, font, library and licence notices |
 
-`GameEngine` owns rules and validates commands independently of the screen or bot. `GameState` is versioned save data. `BotStrategy` plans through the same commands as humans. `SaveStore` handles durable JSON saves and recovery. `AtlasApp` draws the map and touch controls; `GameHud` manages setup, handovers, cards, offers and reports. `DesktopLauncher` and `AndroidLauncher` use the same game.
+Quick start for contributors:
 
-The checked-in board is generated from pinned public-domain Natural Earth sources. To modify it, install `tools/requirements.txt` in a virtual environment and run `python tools/generate_board.py`; Python is not needed to build or play. See [third-party notices](docs/THIRD_PARTY.md).
+```bash
+./gradlew :core:test :android:assembleDebug   # needs JDK 17/21 and Android SDK 35
+./mvnw verify                                  # desktop build and tests, JDK 17+ only
+```
+
+## Project layout
+
+```text
+src/main/java/com/supremacy/
+  game/    Rules engine, state, bots, odds, saves (no rendering)
+  board/   Board data, camera, map rendering, HUD, desktop launcher
+src/main/resources/   board.json, fonts, audio
+src/test/java/        JUnit 5 tests
+android/              Android launcher and APK packaging
+core/                 Gradle module compiling the shared source
+tools/                Optional Python board generator
+docs/                 Rules and developer documentation
+downloads/            Prebuilt debug APK and checksum
+```
+
+## Status
+
+Version 0.2.0. Rules and bots are covered by automated tests. The Android build has not been run on a physical device or emulator, and the 20% population income rule still needs balance playtesting. See [`docs/VERIFICATION.md`](docs/VERIFICATION.md).
+
+## Licence and credits
+
+Geography derives from public-domain Natural Earth data; fonts are Noto under the SIL OFL 1.1. Details are in [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md). No licence file for the game's own code is currently present in the repository.

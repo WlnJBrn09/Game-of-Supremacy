@@ -1,32 +1,50 @@
 # Verification
 
-## Builds
+This records what has been checked, how, and what has not. Update it whenever you rebuild the release APK.
 
-- `./gradlew :core:test :android:assembleDebug` succeeds with JDK 21, Gradle 8.9, Android Gradle Plugin 8.7.3, SDK 35 and build tools 35.0.0.
-- `./mvnw verify` builds the shared game and desktop launcher with Java 17 bytecode.
-- APK manifest inspection confirms minimum Android API 26, landscape orientation, ARMv7/ARM64/x86-64 native libraries, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.
-- The installable debug APK is included in `downloads/`, with a SHA-256 digest. SDKs, emulator images, caches, signing keys and environment-specific proxy configuration are excluded.
+## Build status
 
-## Automated rules checks
+| Check | Result |
+| --- | --- |
+| `./gradlew :core:test :android:assembleDebug` | Passes with JDK 21, Gradle 8.9, AGP 8.7.3, SDK 35, build tools 35.0.0 |
+| `./mvnw verify` | Passes. Java 17 bytecode, desktop launcher and shaded JAR |
+| APK manifest | Min SDK 26, landscape, ARMv7 / ARM64 / x86-64 natives, no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers |
+| Repository hygiene | SDKs, emulator images, caches, signing keys and proxy configuration are not committed |
 
-**25 tests pass:** five board tests, sixteen game tests and four bot-strategy tests. Bot coverage checks exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritizing continent completion, reinforcement batching and persistent objectives. The full-match test runs three seeds at each of the six difficulties (18 completed matches).
+The debug APK in `downloads/` has its digest in `downloads/SHA256SUMS`.
 
-Coverage includes the 71-territory geography and requested custom assignments; connected/symmetric topology; polygon triangulation and hit testing; fixed overhead camera; five-player random setup and 55 armies each; population income; defending ties; conquest/occupation/world victory; repeated fortification and open-border transit; escalating sets and matched-land bonuses; elimination cards and forced trade/deployment; immediate offers, stale offers and counteroffers; garrison redistribution and army conservation; movement history after trades; autosave, random-state preservation, backup recovery and pending occupation; and seeded complete bot matches reaching world conquest at all six difficulties.
+## Automated tests
 
-## Interactive game checks
+**25 tests:** 5 board, 16 engine, 4 bot strategy.
 
-Exercised the actual libGDX desktop game under Xvfb/Mesa using keyboard/pointer input and inspected screenshots:
+- **Board:** 71-territory geography and custom assignments, symmetric and connected topology, polygon triangulation and hit testing, fixed overhead camera.
+- **Engine:** five-player random setup with 55 armies each, population income, defending ties, conquest, occupation and world victory, repeated fortification and open-border transit, escalating card sets and matched-land bonuses, elimination cards and forced trading, immediate / stale / counter offers, garrison redistribution and army conservation, movement history after trades, autosave, RNG state preservation, backup recovery and pending occupation.
+- **Bots:** exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritising continent completion, reinforcement batching and persistent objectives.
+- **Full matches:** three seeds at each of the six difficulties (18 matches), each running to world conquest.
 
-- New match, human handover, territory selection, 55-army setup and bot setup.
-- Reinforcement deployment, attack controls, cards, diplomacy composer and an open-borders offer.
-- Quiet bot turns and the next human's report/handover.
-- Resuming an autosave, rolling a real battle, occupying captured land, advancing to a second human and checking that their private cards are separated by the handover screen.
-- The map uses the existing orthographic pan/zoom transform; Android adds two-finger pinch zoom.
+## Interactive checks
 
-`game-preview.png`, `diplomacy-preview.png` and `handover-preview.png` are screenshots from that shared desktop runtime. They are not Android-device screenshots.
+The real libGDX desktop game was driven under Xvfb/Mesa with keyboard and pointer input, and screenshots were inspected:
 
-## Android runtime limit
+- New match, handover, territory selection, 55-army setup and bot setup.
+- Reinforcement, attack controls, cards, diplomacy composer and an open-borders offer.
+- Quiet bot turns, and the next human's report and handover.
+- Resuming an autosave, a real battle, occupying captured land, advancing to a second human and confirming private cards stay behind the handover screen.
 
-An Android emulator was installed and attempted with API 35 and API 30 images. Its default data partition requires more disk space than available in this workspace. A sparse test partition allowed a guest to start, but guest data-partition/journal initialization failed before the Android framework became ready. This is an emulator setup failure; the APK could not be installed or launched there. Physical-device behaviour, Android touch/pinch interaction and Android audio therefore remain unverified. The APK build and shared rules/UI checks above succeeded.
+The preview images in `docs/` come from this desktop runtime. They are **not** Android screenshots.
 
-The game still needs device and balance playtesting, especially the requested 20% per-turn population growth and the differences among the upper AI difficulty levels. Higher levels use deeper bounded heuristics, not extra armies or favourable dice.
+## Known gaps
+
+- **Not run on Android.** Emulators (API 35 and 30) failed to boot in the available workspace because of disk and data-partition limits, before the Android framework was ready, so the APK was never installed or launched. Real-device behaviour, Android touch and pinch input, and Android audio are unverified.
+- **Balance.** The 20% per-turn population growth rule and the gaps between the upper bot difficulties need playtesting. Higher levels use deeper bounded heuristics, not extra armies or favourable dice.
+- **Save migration.** There is none, and the save format is at version 1.
+- **Release signing.** Only a debug-signed build exists.
+
+## How to re-verify
+
+```bash
+./gradlew :core:test :android:assembleDebug
+./mvnw clean verify
+```
+
+For an interactive desktop check on a headless machine, run the JAR under `xvfb-run` with `-Dsupremacy.saveDir=<temp dir> -Dsupremacy.noAudio=true`.
