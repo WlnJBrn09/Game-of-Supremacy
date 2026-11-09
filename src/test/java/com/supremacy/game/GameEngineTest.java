@@ -47,7 +47,7 @@ class GameEngineTest {
     assertEquals(
         List.of("Player 1", "Charles", "George", "Douglas", "Dan"),
         g.state.players.stream().map(p -> p.name).toList());
-    assertEquals(71, Arrays.stream(g.state.owners).count());
+    assertEquals(72, Arrays.stream(g.state.owners).count());
     finishSetup(g);
     for (int p = 0; p < 5; p++) assertEquals(55, g.total(p));
     assertEquals(REINFORCE, g.state.phase);
@@ -130,7 +130,8 @@ class GameEngineTest {
     assertEquals(15, g.nextSetValue());
     g.state.tradeCount = 6;
     assertEquals(20, g.nextSetValue());
-    assertTrue(g.validSet(List.of(0, 1, 71)));
+    assertTrue(g.validSet(List.of(0, 1, g.state.owners.length)));
+    assertEquals(3, g.symbol(g.state.owners.length));
     assertFalse(g.validSet(List.of(0, 3, 1)));
     g.validate();
   }

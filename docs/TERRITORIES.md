@@ -1,6 +1,6 @@
 # Territory groupings
 
-These are gameplay regions, not a claim about sovereignty. Tiny offshore islands are grouped geographically. Antarctica and remote subantarctic islands are omitted. Canada has all ten provinces and all three northern territories. Australia has five mainland state territories plus Northern Territory; Tasmania is merged with Victoria, and ACT belongs to New South Wales. Tanzania belongs to Ethiopia. Chad is divided at 16 N and 18 E: north to Egypt, southwest to Mali, southeast to Ethiopia. Northern Mauritania above 22 N belongs to Algeria; the remainder belongs to Mali. Belgium belongs to France. Duplicate US-East and Baltics entries are deduplicated, and US-West covers the western US. Colombia and Philippines use their standard spellings.
+These are gameplay regions, not a claim about sovereignty. Tiny offshore islands are grouped geographically. Antarctica and remote subantarctic islands are omitted. Canada has all ten provinces and all three northern territories. Australia has five mainland state territories plus Northern Territory; Tasmania is merged with Victoria, and ACT belongs to New South Wales. Tanzania belongs to Ethiopia. Chad is its own territory and also includes Cameroon, the Central African Republic and Niger east of 10 E; western Niger belongs to Mali. Northern Mauritania above 22 N belongs to Algeria; the remainder belongs to Mali. Belgium belongs to France. Duplicate US-East and Baltics entries are deduplicated, and US-West covers the western US. Colombia and Philippines use their standard spellings.
 
 Russian subjects are grouped as Russia (European districts), Urals, Siberia (western), Irkutsk (eastern Siberia), Yakutsk (Sakha), and Far East. This keeps the board readable while including the requested Yakutsk and Irkutsk.
 
@@ -69,14 +69,15 @@ Russian subjects are grouped as Russia (European districts), Urals, Siberia (wes
 | New South Wales | Australia | New South Wales, Australian Capital Territory, Jervis Bay Territory, Lord Howe Island |
 | Victoria | Australia | Victoria, Tasmania, Macquarie Island |
 | New Zealand | Australia | Vanuatu, Solomon Islands, New Zealand, New Caledonia, Fiji, Norfolk Island, American Samoa, Tonga, Samoa, Niue, Cook Islands, Wallis and Futuna, Tuvalu |
-| Egypt | Africa | South Sudan, Sudan, Libya, Egypt, northern Chad (north of 16 N) |
-| Ethiopia | Africa | Uganda, United Republic of Tanzania, Somalia, Somaliland, Kenya, Ethiopia, Eritrea, Djibouti, southeastern Chad (south of 16 N, east of 18 E) |
-| Congo | Africa | Rwanda, Gabon, Equatorial Guinea, Democratic Republic of the Congo, Republic of the Congo, Central African Republic, Burundi, Angola, São Tomé and Principe |
+| Egypt | Africa | South Sudan, Sudan, Libya, Egypt |
+| Ethiopia | Africa | Uganda, United Republic of Tanzania, Somalia, Somaliland, Kenya, Ethiopia, Eritrea, Djibouti |
+| Congo | Africa | Rwanda, Gabon, Equatorial Guinea, Democratic Republic of the Congo, Republic of the Congo, Burundi, Angola, São Tomé and Principe |
 | Southern Africa | Africa | Zimbabwe, Zambia, eSwatini, South Africa, Namibia, Mozambique, Malawi, Lesotho, Botswana |
 | Madagascar | Africa | Seychelles, Mauritius, Madagascar, Comoros, nearby French overseas islands/land, nearby French overseas islands/land |
 | Algeria | Africa | Tunisia, Morocco, Western Sahara, Algeria, northern Mauritania (north of 22 N) |
-| Nigeria | Africa | Togo, Nigeria, Ghana, Ivory Coast, Cameroon, Benin |
-| Mali | Africa | Sierra Leone, Senegal, Niger, southern Mauritania (south of 22 N), Mali, Liberia, Guinea-Bissau, Guinea, Gambia, Cabo Verde, Burkina Faso, southwestern Chad (south of 16 N, west of 18 E), Saint Helena |
+| Nigeria | Africa | Togo, Nigeria, Ghana, Ivory Coast, Benin |
+| Mali | Africa | Sierra Leone, Senegal, western Niger (west of 10 E), southern Mauritania (south of 22 N), Mali, Liberia, Guinea-Bissau, Guinea, Gambia, Cabo Verde, Burkina Faso, Saint Helena |
+| Chad | Africa | Chad, Cameroon, Central African Republic, eastern Niger (east of 10 E) |
 
 ## Sea routes
 

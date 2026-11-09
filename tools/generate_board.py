@@ -76,17 +76,17 @@ for name in ['Western Australia','Northern Territory','South Australia','Queensl
     if name=='Victoria': names += ['Tasmania','Macquarie Island']
     add(name,'Australia',[f for f in provinces if f['properties']['admin']=='Australia' and f['properties']['name'] in names],', '.join(names))
 group('New Zealand','Australia','NZL NFK NCL FJI VUT SLB')
-for name,codes in [('Egypt','EGY LBY SDN SDS'),('Ethiopia','ETH ERI DJI SOM SOL KEN UGA TZA'),('Congo','COD COG GAB GNQ CAF AGO RWA BDI'),('Southern Africa','ZAF NAM BWA ZWE ZMB MWI MOZ SWZ LSO'),('Madagascar','MDG COM MUS SYC'),('Algeria','DZA MAR TUN SAH'),('Nigeria','NGA CMR BEN TGO GHA CIV'),('Mali','MLI MRT SEN GMB GNB GIN SLE LBR BFA NER CPV')]:
+for name,codes in [('Egypt','EGY LBY SDN SDS'),('Ethiopia','ETH ERI DJI SOM SOL KEN UGA TZA'),('Congo','COD COG GAB GNQ AGO RWA BDI'),('Southern Africa','ZAF NAM BWA ZWE ZMB MWI MOZ SWZ LSO'),('Madagascar','MDG COM MUS SYC'),('Algeria','DZA MAR TUN SAH'),('Nigeria','NGA BEN TGO GHA CIV'),('Mali','MLI MRT SEN GMB GNB GIN SLE LBR BFA NER CPV')]:
     group(name,'Africa',codes)
-# Requested custom borders: northern Chad to Egypt, southwest to Mali,
-# southeast to Ethiopia; northern Mauritania (above 22 N) to Algeria.
-chad=shape(next(f['geometry'] for f in countries if f['properties']['ADM0_A3']=='TCD'))
-for name,clip,description in [
-    ('Egypt',box(-180,16,180,90),'northern Chad (north of 16 N)'),
-    ('Mali',box(-180,-90,18,16),'southwestern Chad (south of 16 N, west of 18 E)'),
-    ('Ethiopia',box(18,-90,180,16),'southeastern Chad (south of 16 N, east of 18 E)')]:
-    territories[name]['geometry']=unary_union([territories[name]['geometry'],chad.intersection(clip)]).buffer(0)
-    territories[name]['includes']+=', '+description
+# Requested custom borders: Chad is its own territory with Cameroon, the
+# Central African Republic and eastern Niger (east of 10 E); northern
+# Mauritania (above 22 N) belongs to Algeria.
+def country(code): return shape(next(f['geometry'] for f in countries if f['properties']['ADM0_A3']==code))
+eastern_niger=country('NER').intersection(box(10,-90,180,90))
+add('Chad','Africa',[country('TCD'),country('CMR'),country('CAF'),eastern_niger],
+    'Chad, Cameroon, Central African Republic, eastern Niger (east of 10 E)')
+territories['Mali']['geometry']=territories['Mali']['geometry'].difference(eastern_niger).buffer(0)
+territories['Mali']['includes']=territories['Mali']['includes'].replace('Niger','western Niger (west of 10 E)')
 mauritania=shape(next(f['geometry'] for f in countries if f['properties']['ADM0_A3']=='MRT'))
 northern_mauritania=mauritania.intersection(box(-180,22,180,90))
 territories['Mali']['geometry']=territories['Mali']['geometry'].difference(northern_mauritania)
@@ -106,7 +106,7 @@ for name in list(territories):
             territories[target]['geometry']=unary_union([territories[target]['geometry'],part])
             territories[target]['includes'] += ', nearby French overseas islands/land'
 # Remaining small islands are absorbed into the nearest regional territory.
-assigned=set('CAN USA AUS RUS ATA ATF HMD SGS TCD MRT'.split())
+assigned=set('CAN USA AUS RUS ATA ATF HMD SGS TCD CMR CAF NER MRT'.split())
 for t in territories.values():
     for f in countries:
         if f['properties']['ADMIN'] in t['includes'].split(', '): assigned.add(f['properties']['ADM0_A3'])
@@ -180,7 +180,7 @@ anchors={
  'Iceland':(-19,65),'England':(-3,55),'Nordics':(18,65),'France':(2,47),'Spain':(-4,40),'Germany':(10,50),'Poland':(20,51),'Italy':(16,42),'Ukraine':(30,49),'Baltics':(25,58),
  'Russia':(44,60),'Urals':(66,63),'Siberia':(82,57),'Irkutsk':(103,60),'Yakutsk':(128,65),'Far East':(158,61),
  'Turkey':(35,40),'Syria':(37,32),'Arabia':(46,24),'Persia':(52,33),'Central Asia':(65,43),'India':(78,23),'Mongolia':(103,47),'China':(105,34),'Thailand':(100,17),'Korea':(127,40),'Japan':(139,37),'Philippines':(123,12),'Indonesia':(119,-4),
- 'Egypt':(28,23),'Algeria':(3,28),'Mali':(-3,17),'Nigeria':(7,7),'Ethiopia':(40,6),'Congo':(22,-5),'Southern Africa':(25,-23),'Madagascar':(47,-20),
+ 'Egypt':(28,23),'Algeria':(3,28),'Mali':(-3,17),'Nigeria':(7,7),'Ethiopia':(40,6),'Chad':(18.5,13),'Congo':(22,-5),'Southern Africa':(25,-23),'Madagascar':(47,-20),
  'Western Australia':(122,-26),'Northern Territory':(133,-20),'South Australia':(135,-30),'Queensland':(145,-22),'New South Wales':(147,-32),'Victoria':(144,-37),'Tasmania':(147,-43),'New Zealand':(173,-41)}
 labels={'Northwest Territories':'NORTHWEST\nTERRITORIES','Newfoundland and Labrador':'NEWFOUNDLAND\n& LABRADOR','British Columbia':'BRITISH\nCOLUMBIA','Prince Edward Island':'P.E.I.','New Brunswick':'N.B.','Nova Scotia':'N.S.','Central America':'CENTRAL\nAMERICA','Central Asia':'CENTRAL ASIA','Southern Africa':'SOUTHERN\nAFRICA','Western Australia':'WESTERN\nAUSTRALIA','Northern Territory':'NORTHERN\nTERRITORY','South Australia':'SOUTH\nAUSTRALIA','New South Wales':'NEW SOUTH\nWALES','New Zealand':'NEW\nZEALAND'}
 output=[]
@@ -198,7 +198,7 @@ for name,t in territories.items():
 for e in edges:e['via']=[xy(p) for p in e['via']]
 data=dict(width=1800,height=750,continents=[dict(name=n,color=c) for n,c in continents],territories=output,connections=edges)
 (ROOT/'src/main/resources/board.json').write_text(json.dumps(data,separators=(',',':'))+'\n')
-lines=['# Territory groupings','', 'These are gameplay regions, not a claim about sovereignty. Tiny offshore islands are grouped geographically. Antarctica and remote subantarctic islands are omitted. Canada has all ten provinces and all three northern territories. Australia has five mainland state territories plus Northern Territory; Tasmania is merged with Victoria, and ACT belongs to New South Wales. Tanzania belongs to Ethiopia. Chad is divided at 16 N and 18 E: north to Egypt, southwest to Mali, southeast to Ethiopia. Northern Mauritania above 22 N belongs to Algeria; the remainder belongs to Mali. Belgium belongs to France. Duplicate US-East and Baltics entries are deduplicated, and US-West covers the western US. Colombia and Philippines use their standard spellings.','', 'Russian subjects are grouped as Russia (European districts), Urals, Siberia (western), Irkutsk (eastern Siberia), Yakutsk (Sakha), and Far East. This keeps the board readable while including the requested Yakutsk and Irkutsk.','', '| Territory | Continent | Includes |','| --- | --- | --- |']
+lines=['# Territory groupings','', 'These are gameplay regions, not a claim about sovereignty. Tiny offshore islands are grouped geographically. Antarctica and remote subantarctic islands are omitted. Canada has all ten provinces and all three northern territories. Australia has five mainland state territories plus Northern Territory; Tasmania is merged with Victoria, and ACT belongs to New South Wales. Tanzania belongs to Ethiopia. Chad is its own territory and also includes Cameroon, the Central African Republic and Niger east of 10 E; western Niger belongs to Mali. Northern Mauritania above 22 N belongs to Algeria; the remainder belongs to Mali. Belgium belongs to France. Duplicate US-East and Baltics entries are deduplicated, and US-West covers the western US. Colombia and Philippines use their standard spellings.','', 'Russian subjects are grouped as Russia (European districts), Urals, Siberia (western), Irkutsk (eastern Siberia), Yakutsk (Sakha), and Far East. This keeps the board readable while including the requested Yakutsk and Irkutsk.','', '| Territory | Continent | Includes |','| --- | --- | --- |']
 for t in output:lines.append(f"| {t['name']} | {t['continent']} | {t['includes']} |")
 lines+=['','## Sea routes','',f'{len(sea)} bidirectional sea lanes. Dashed gold lines and endpoint rings distinguish them from solid land borders. Selecting a territory highlights only its routes; numbered lane tags in the inspector distinguish destinations. Pacific crossings wrap at both map edges.','']
 for a,b,_ in sea:lines.append(f'- {a} ↔ {b}')

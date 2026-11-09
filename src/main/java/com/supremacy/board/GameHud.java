@@ -1380,7 +1380,14 @@ final class GameHud {
           64,
           Style.NORMAL,
           () -> {
-            GameEngine restored = saves.load(app.board);
+            GameEngine restored;
+            try {
+              restored = saves.load(app.board);
+            } catch (IllegalStateException e) {
+              if (String.valueOf(e.getMessage()).contains("different board"))
+                refuse("This saved game uses an older version of the map. Start a new game.");
+              throw e;
+            }
             String warning = saves.warning();
             attach(restored);
             if (warning != null && !warning.isEmpty()) say(warning, true);
@@ -1979,7 +1986,9 @@ final class GameHud {
   private void rules() {
     panel("HOW TO PLAY  ·  " + (page % 4 + 1) + " / 4");
     String[] pages = {
-      "GOAL\nConquer all 71 territories. Five commanders share the world; territories are dealt at"
+      "GOAL\nConquer all "
+          + app.board.regions.size()
+          + " territories. Five commanders share the world; territories are dealt at"
           + " random and everyone places 55 starting armies.\n\n"
           + "YOUR TURN\n1  REINFORCE — tap your territories to place new armies.\n2  ATTACK —"
           + " tap your territory, then an enemy neighbour, then ROLL or BLITZ.\n3  FORTIFY —"

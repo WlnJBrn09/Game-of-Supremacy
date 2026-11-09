@@ -2,7 +2,7 @@
 
 ## Match and setup
 
-Exactly five players. Choose one to five humans; remaining seats are filled, in order, by Charles, George, Douglas and Dan. All bots share the chosen difficulty: Beginner, Easy, Medium, Hard, MegaHard or TeraHard. The 71 territories are shuffled and dealt round-robin; each receives one army. Every player deploys the remainder of their **55 starting armies**. Human players deploy their own armies; bots deploy automatically. Human turn order is the setup order.
+Exactly five players. Choose one to five humans; remaining seats are filled, in order, by Charles, George, Douglas and Dan. All bots share the chosen difficulty: Beginner, Easy, Medium, Hard, MegaHard or TeraHard. The 72 territories are shuffled and dealt round-robin; each receives one army. Every player deploys the remainder of their **55 starting armies**. Human players deploy their own armies; bots deploy automatically. Human turn order is the setup order.
 
 World conquest wins. Every territory and army count is public. Card faces are private; a handover screen covers the game between human turns and after returning from the background.
 

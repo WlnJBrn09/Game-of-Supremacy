@@ -1,6 +1,6 @@
 # Game of Supremacy
 
-An **offline Android conquest game in Java/libGDX**, built around a custom 71-territory world board. Play with exactly five participants: one to five humans sharing a device, filled out by Charles, George, Douglas and Dan.
+An **offline Android conquest game in Java/libGDX**, built around a custom 72-territory world board. Play with exactly five participants: one to five humans sharing a device, filled out by Charles, George, Douglas and Dan.
 
 The board stays directly overhead. Armies are numbered game-piece tokens in player colours, and play is laid out like the classic board game: the world map on top, a command console underneath with the commanders, the phase track (Reinforce → Attack → Fortify) and one big next-step button. Matches include random territories, 55 starting armies per player, Risk dice and escalating cards, world conquest, private hands, automatic saves, asynchronous trade offers, adjacent army gifts and open borders. Six shared AI difficulties use persistent objectives and progressively deeper planning; bot turns are summarized at the next human turn.
 
@@ -48,7 +48,7 @@ The **Continent bonuses** panel on the map shows each bonus, your progress and w
 
 ## Geography and implementation
 
-Seven continents: North America, South America, Europe, Africa, Asia, Australia and Middle-East. The board retains the requested revisions: Yakutsk and Irkutsk; Belgium with France; Tanzania with Ethiopia; Tasmania with Victoria; Chad divided among Mali, Egypt and Ethiopia; northern Mauritania with Algeria. It has 112 land connections and 34 sea lanes, with original nautical decoration and Pacific wrapping.
+Seven continents: North America, South America, Europe, Africa, Asia, Australia and Middle-East. The board retains the requested revisions: Yakutsk and Irkutsk; Belgium with France; Tanzania with Ethiopia; Tasmania with Victoria; Chad as its own territory with Cameroon, the Central African Republic and eastern Niger; northern Mauritania with Algeria. It has 113 land connections and 34 sea lanes, with original nautical decoration and Pacific wrapping.
 
 `GameEngine` owns rules and validates commands independently of the screen or bot. `GameState` is versioned save data. `BotStrategy` plans through the same commands as humans. `SaveStore` handles durable JSON saves and recovery. `AtlasApp` draws the map, army tokens and touch controls; `GameHud` draws the command console and manages setup, handovers, cards, offers and reports. `DesktopLauncher` and `AndroidLauncher` use the same game.
 
