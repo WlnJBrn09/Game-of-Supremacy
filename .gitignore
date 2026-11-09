@@ -7,3 +7,8 @@ tools/cache/
 __pycache__/
 
 tools/.venv/
+.gradle/
+**/build/
+local.properties
+*.jks
+*.keystore

@@ -19,3 +19,11 @@ Noto Sans Regular and Noto Serif Regular are bundled under the SIL Open Font Lic
 - Shapely (optional map-generation dependency): BSD 3-Clause — https://github.com/shapely/shapely
 
 Upstream notices packaged in dependency JARs remain in the bundled build. All nautical decorations and UI artwork are original vector drawings made for this board. Risk is mentioned only to describe the requested game style; no Risk logo, board image, or proprietary artwork is included.
+
+## Game audio
+
+The short dice and conquest WAV effects are original procedurally synthesized sounds generated for this project. No external sound recordings are bundled.
+
+## Android build
+
+The Android project uses Android Gradle Plugin and the Android SDK at build time; SDK tools, emulator images and signing keys are not included in this repository. Core library desugaring uses Google's `desugar_jdk_libs` (GPLv2 with Classpath Exception) — https://github.com/google/desugar_jdk_libs. AndroidX support libraries are Apache License 2.0 — https://android.googlesource.com/platform/frameworks/support/.

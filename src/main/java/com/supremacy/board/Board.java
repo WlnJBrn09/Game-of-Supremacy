@@ -90,7 +90,7 @@ public final class Board {
         if (regions.isEmpty()) throw new IllegalArgumentException("Empty board");
         queue.add(regions.get(0));
         while (!queue.isEmpty()) { Region r = queue.remove(); if (reached.add(r)) for (Connection e : links(r)) queue.add(e.other(r)); }
-        if (reached.size() != regions.size()) throw new IllegalArgumentException("Disconnected board: " + regions.stream().filter(r -> !reached.contains(r)).map(r -> r.name).toList());
+        if (reached.size() != regions.size()) throw new IllegalArgumentException("Disconnected board: " + regions.stream().filter(r -> !reached.contains(r)).map(r -> r.name).collect(java.util.stream.Collectors.toList()));
     }
     public Region region(String name) { return Objects.requireNonNull(byName.get(name), "Unknown region: " + name); }
     public List<Connection> links(Region region) { return adjacency.get(region); }
