@@ -6,6 +6,8 @@ The board stays directly overhead. Armies are numbered game-piece tokens in play
 
 ![Game screen](docs/game-preview.png)
 
+![Player setup](docs/players-preview.png)
+
 See [the full rules and chosen defaults](docs/GAME_RULES.md), [territory groupings](docs/TERRITORIES.md), and [verification](docs/VERIFICATION.md).
 
 ## Install on Android
@@ -36,7 +38,7 @@ On macOS add `-XstartOnFirstThread` to the Java command. On Windows use `mvnw.cm
 
 ## Playing
 
-On the title screen, tap a seat to switch it between **Human** and **Computer**, pick one computer skill level, and start a new game (or resume the autosave). With one human there is no pass-the-device screen; with several, a handover screen keeps each player's cards private.
+On the title screen, tap a seat to switch it between **Human** and **Computer**, pick one computer skill level, and start a new game (or resume the autosave). Every human types a name and chooses a colour: tap a human's name to open the player editor (it has its own on-screen keyboard, so it works on a phone with no system keyboard), or just press **Start new game** and you are asked for each unnamed player in turn. Names are up to 12 characters and must be unique, including against the computer players in the game; if you pick a colour another human holds, the two swap. Computers take the remaining colours. Names and colours are remembered between launches. With one human there is no pass-the-device screen; with several, a handover screen keeps each player's cards private.
 
 The console under the map always tells you what to do next:
 

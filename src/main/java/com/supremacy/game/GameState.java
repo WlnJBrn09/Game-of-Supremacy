@@ -23,11 +23,21 @@ public final class GameState {
   }
 
   public static final String[] BOT_NAMES = {"Charles", "George", "Douglas", "Dan"};
-  public static final String[] COLORS = {"D35E59", "4D9EC4", "D8B456", "81B581", "AA8EC5"};
+  /** Selectable player colours (hex RGB). Every player holds a different one. */
+  public static final String[] COLORS = {
+    "D35E59", "4D9EC4", "D8B456", "81B581", "AA8EC5", "E08A4A", "4FB8A8", "DE7FA6"
+  };
+
+  public static final String[] COLOR_NAMES = {
+    "Red", "Blue", "Gold", "Green", "Purple", "Orange", "Teal", "Pink"
+  };
+  public static final int MAX_NAME = 12;
 
   public static final class Player {
     public String name;
     public boolean human;
+    // Index into COLORS; -1 only while reading a save written before colours were selectable.
+    public int color = -1;
     public ArrayList<Integer> cards = new ArrayList<>();
     // A persistent strategic objective, reconsidered when the position changes.
     public String objective = "";
@@ -85,4 +95,9 @@ public final class GameState {
   public int[] lastReadTurn = {-1, -1, -1, -1, -1};
 
   public GameState() {}
+
+  /** Hex RGB string of a player's chosen colour. */
+  public String color(int player) {
+    return COLORS[players.get(player).color];
+  }
 }

@@ -28,7 +28,8 @@ final class GameHud {
     COMPOSE,
     PICK,
     SETTINGS,
-    RULES
+    RULES,
+    PLAYER
   }
 
   /** How a territory is emphasised on the map this frame. */
@@ -92,6 +93,13 @@ final class GameHud {
   private final List<Floater> floaters = new ArrayList<>();
   private GameState.Offer draft, viewOffer;
   private boolean armyPage, soundEnabled, logMode;
+  // Title-screen seat setup: the first `humans` seats are human players.
+  private final String[] seatName = {"Player 1", "Player 2", "Player 3", "Player 4", "Player 5"};
+  private final int[] seatColor = {0, 1, 2, 3, 4};
+  private final boolean[] named = new boolean[5];
+  private int editing = -1;
+  private String editText = "";
+  private boolean editFlow, editFresh, shift;
   private Modal rulesReturn = Modal.MENU;
   private Sound diceSound, winSound;
 
@@ -101,12 +109,171 @@ final class GameHud {
         System.getProperty("supremacy.saveDir", Gdx.files.getLocalStoragePath() + "supremacy");
     saves = new SaveStore(java.nio.file.Paths.get(dir, "autosave.json"));
     soundEnabled = Gdx.app.getPreferences("supremacy-options").getBoolean("sound", true);
+    loadSetup();
     try {
       diceSound = Gdx.audio.newSound(Gdx.files.internal("audio/dice.wav"));
       winSound = Gdx.audio.newSound(Gdx.files.internal("audio/conquest.wav"));
     } catch (RuntimeException e) {
       diceSound = winSound = null;
     }
+  }
+
+  // ---------------------------------------------------------------- player setup
+
+  private void loadSetup() {
+    try {
+      Preferences prefs = Gdx.app.getPreferences("supremacy-options");
+      humans = Math.max(1, Math.min(5, prefs.getInteger("humans", 1)));
+      difficulty = Math.max(0, Math.min(5, prefs.getInteger("difficulty", 2)));
+      int[] colors = new int[5];
+      Set<Integer> used = new HashSet<>();
+      for (int i = 0; i < 5; i++) {
+        colors[i] = prefs.getInteger("color" + i, i);
+        if (colors[i] < 0 || colors[i] >= GameState.COLORS.length || !used.add(colors[i])) return;
+      }
+      System.arraycopy(colors, 0, seatColor, 0, 5);
+      for (int i = 0; i < 5; i++) {
+        String saved = prefs.getString("name" + i, "");
+        if (saved.isEmpty()) continue;
+        seatName[i] = GameEngine.cleanName(saved);
+        named[i] = true;
+      }
+    } catch (RuntimeException e) {
+      // Unreadable preferences just mean default names and colours.
+    }
+  }
+
+  private void saveSetup() {
+    try {
+      Preferences prefs = Gdx.app.getPreferences("supremacy-options");
+      prefs.putInteger("humans", humans).putInteger("difficulty", difficulty);
+      for (int i = 0; i < 5; i++) {
+        prefs.putString("name" + i, named[i] ? seatName[i] : "");
+        prefs.putInteger("color" + i, seatColor[i]);
+      }
+      prefs.flush();
+    } catch (RuntimeException e) {
+      // Remembering setup is a convenience; never block the game on it.
+    }
+  }
+
+  private int[] previewColors() {
+    return GameEngine.assignColors(humans, seatColor);
+  }
+
+  private Color menuColor(int seat) {
+    return Color.valueOf(GameState.COLORS[previewColors()[seat]]);
+  }
+
+  private int nextUnnamed() {
+    for (int i = 0; i < humans; i++) if (!named[i]) return i;
+    return -1;
+  }
+
+  /** Validates a name for a human seat against the other humans and the computer players in use. */
+  private String validatedName(int seat, String raw) {
+    String name = GameEngine.cleanName(raw);
+    for (int i = 0; i < humans; i++)
+      if (i != seat && named[i] && seatName[i].equalsIgnoreCase(name))
+        throw new IllegalStateException("Another player is already called " + name + ".");
+    for (int k = 0; k < 5 - humans; k++)
+      if (GameState.BOT_NAMES[k].equalsIgnoreCase(name))
+        throw new IllegalStateException(name + " is a computer player's name. Pick another.");
+    return name;
+  }
+
+  private void openEditor(int seat, boolean flow) {
+    editing = seat;
+    editFlow = flow;
+    editText = named[seat] ? seatName[seat] : "";
+    editFresh = false;
+    shift = false;
+    modal = Modal.PLAYER;
+  }
+
+  private void pickColor(int seat, int color) {
+    for (int j = 0; j < 5; j++)
+      if (j != seat && seatColor[j] == color) {
+        seatColor[j] = seatColor[seat]; // taking another seat's colour swaps the two
+        break;
+      }
+    seatColor[seat] = color;
+    saveSetup();
+  }
+
+  private void insert(char c) {
+    if (editFresh) editText = "";
+    editFresh = false;
+    if (editText.length() >= GameState.MAX_NAME) return;
+    editText += c;
+  }
+
+  /** On-screen key: letters capitalise at the start of each word or after SHIFT. */
+  private void press(char c) {
+    if (Character.isLetter(c)) {
+      boolean upper = shift || editText.isEmpty() || editText.endsWith(" ") || editFresh;
+      c = upper ? Character.toUpperCase(c) : Character.toLowerCase(c);
+      shift = false;
+    }
+    insert(c);
+  }
+
+  private void backspace() {
+    if (editFresh) editText = "";
+    editFresh = false;
+    if (!editText.isEmpty()) editText = editText.substring(0, editText.length() - 1);
+  }
+
+  /** Physical keyboard text, keeping the case the player typed. */
+  boolean typed(char c) {
+    if (modal != Modal.PLAYER) return false;
+    if (Character.isLetterOrDigit(c) || c == ' ' || c == '-' || c == '\'' || c == '.') {
+      insert(c);
+      Gdx.graphics.requestRendering();
+    }
+    return true;
+  }
+
+  /** Backspace and Enter on a physical keyboard while the name editor is open. */
+  boolean editKey(int key) {
+    if (modal != Modal.PLAYER) return false;
+    if (key == Input.Keys.BACKSPACE) backspace();
+    else if (key == Input.Keys.ENTER || key == Input.Keys.NUMPAD_ENTER) action(this::finishEdit);
+    Gdx.graphics.requestRendering();
+    return true;
+  }
+
+  private void finishEdit() {
+    String name = validatedName(editing, editText);
+    seatName[editing] = name;
+    named[editing] = true;
+    saveSetup();
+    if (editFlow) {
+      int next = nextUnnamed();
+      if (next >= 0) {
+        openEditor(next, true);
+        return;
+      }
+      modal = Modal.MENU;
+      startPressed();
+    } else modal = Modal.MENU;
+  }
+
+  private void startPressed() {
+    int unnamed = nextUnnamed();
+    if (unnamed >= 0) {
+      openEditor(unnamed, true);
+      say("Enter a name for " + seatName[unnamed] + " to begin.", false);
+      return;
+    }
+    for (int i = 0; i < humans; i++) seatName[i] = validatedName(i, seatName[i]);
+    if ((game != null || saves.exists()) && !confirmNew) {
+      confirmNew = true;
+      say("Starting a new game replaces your saved game.", false);
+      return;
+    }
+    confirmNew = false;
+    newMatch();
   }
 
   void attach(GameEngine engine) {
@@ -212,6 +379,7 @@ final class GameHud {
 
   boolean animating() {
     return animation > 0
+        || modal == Modal.PLAYER
         || !floaters.isEmpty()
         || clock - toastAt < 3.6f
         || (interactive() && (from >= 0 || game.state.phase == OCCUPY));
@@ -601,7 +769,7 @@ final class GameHud {
   }
 
   private Color playerColor(int p) {
-    return Color.valueOf(GameState.COLORS[p]);
+    return Color.valueOf(game.state.color(p));
   }
 
   private void token(float x, float y, float r, Color c) {
@@ -1280,6 +1448,7 @@ final class GameHud {
 
   private void closeModal() {
     if (modal == Modal.PICK) modal = returnModal;
+    else if (modal == Modal.PLAYER) modal = Modal.MENU;
     else if (modal == Modal.OFFER || modal == Modal.COMPOSE) modal = Modal.DIPLOMACY;
     else if (modal == Modal.RULES) modal = rulesReturn;
     else modal = game == null ? Modal.MENU : Modal.NONE;
@@ -1298,6 +1467,7 @@ final class GameHud {
       case PICK -> picker();
       case SETTINGS -> settings();
       case RULES -> rules();
+      case PLAYER -> editor();
       default -> {}
     }
   }
@@ -1307,15 +1477,25 @@ final class GameHud {
     text(app.title, "GAME OF SUPREMACY", 260, 880, AtlasApp.WHITE);
     text(app.body, "Five commanders. Seven continents. One world.", 262, 826, AtlasApp.MUTED);
     // Seats.
-    text(app.small, "COMMANDERS  ·  TAP A SEAT TO SWITCH HUMAN / COMPUTER", 260, 780, AtlasApp.GOLD);
+    text(app.small, "COMMANDERS  ·  TAP A HUMAN'S NAME TO EDIT NAME AND COLOUR", 260, 780, AtlasApp.GOLD);
+    int[] preview = previewColors();
     for (int i = 0; i < 5; i++) {
       int seat = i;
       float y = 704 - i * 66;
       boolean human = i < humans;
       round(260, y, 500, 58, 10, RAISED);
-      token(292, y + 29, 14, playerColor(i));
-      String name = human ? "Player " + (i + 1) : GameState.BOT_NAMES[i - humans];
-      txt(name, 320, y + 39, AtlasApp.WHITE);
+      token(292, y + 29, 14, Color.valueOf(GameState.COLORS[preview[i]]));
+      if (human) {
+        fit(app.gameFont, seatName[i], 320, y + 40, 230, named[i] ? AtlasApp.WHITE : AtlasApp.MUTED);
+        text(
+            app.small,
+            named[i] ? "Tap to edit name and colour" : "Tap to enter your name",
+            320,
+            y + 17,
+            named[i] ? AtlasApp.MUTED : AtlasApp.GOLD);
+        app.hits.add(
+            new AtlasApp.Hit(new Rectangle(260, y, 320, 58), () -> action(() -> openEditor(seat, false))));
+      } else txt(GameState.BOT_NAMES[i - humans], 320, y + 39, AtlasApp.WHITE);
       button(
           human ? "HUMAN" : "COMPUTER",
           590,
@@ -1327,6 +1507,7 @@ final class GameHud {
             confirmNew = false;
             if (seat == 0) refuse("Seat 1 is always a human player.");
             humans = seat < humans ? seat : seat + 1;
+            saveSetup();
           });
     }
     // Skill.
@@ -1346,6 +1527,7 @@ final class GameHud {
               () -> {
                 difficulty = level;
                 confirmNew = false;
+                saveSetup();
               }));
     }
     wrap(
@@ -1399,24 +1581,83 @@ final class GameHud {
         470,
         64,
         confirmNew ? Style.DANGER : Style.PRIMARY,
-        () -> {
-          if ((game != null || saved) && !confirmNew) {
-            confirmNew = true;
-            say("Starting a new game replaces your saved game.", false);
-          } else {
-            confirmNew = false;
-            newMatch();
-          }
-        });
+        this::startPressed);
+  }
+
+  // ---------------------------------------------------------------- player editor
+
+  private void editor() {
+    panel("PLAYER " + (editing + 1));
+    Color current = Color.valueOf(GameState.COLORS[seatColor[editing]]);
+    token(1160, 862, 20, current);
+    text(app.small, "NAME", 260, 828, AtlasApp.GOLD);
+    round(256, 738, 612, 66, 12, AtlasApp.GOLD);
+    round(259, 741, 606, 60, 10, AtlasApp.INK);
+    if (editText.isEmpty()) text(app.gameFont, "Type your name", 276, 780, AtlasApp.MUTED);
+    else text(app.gameFont, editText, 276, 780, AtlasApp.WHITE);
+    if (((int) (clock * 2)) % 2 == 0) {
+      float cx = 276 + (editText.isEmpty() ? 0 : app.width(app.gameFont, editText)) + 3;
+      box(cx, 752, 3, 38, AtlasApp.GOLD);
+    }
+    right(app.small, editText.length() + " / " + GameState.MAX_NAME, 856, 760, AtlasApp.MUTED);
+    text(app.small, "COLOUR", 260, 722, AtlasApp.GOLD);
+    for (int k = 0; k < GameState.COLORS.length; k++) {
+      int color = k;
+      float cx = 290 + k * 72, cy = 670;
+      boolean chosen = seatColor[editing] == k;
+      int holder = -1;
+      for (int j = 0; j < humans; j++) if (j != editing && seatColor[j] == k) holder = j;
+      if (chosen) token(cx, cy, 31, AtlasApp.GOLD);
+      token(cx, cy, 25, Color.valueOf(GameState.COLORS[k]));
+      if (holder >= 0)
+        center(app.small, Integer.toString(holder + 1), cx, cy + 5, AtlasApp.INK);
+      app.hits.add(
+          new AtlasApp.Hit(
+              new Rectangle(cx - 34, cy - 34, 68, 68), () -> action(() -> pickColor(editing, color))));
+    }
+    text(app.gameFont, GameState.COLOR_NAMES[seatColor[editing]], 880, 680, current);
+    text(app.small, "A number marks a colour another human holds; picking it swaps the two.", 260, 620, AtlasApp.MUTED);
+    String[] rows = {"1234567890", "QWERTYUIOP", "ASDFGHJKL"};
+    float[] ys = {540, 472, 404};
+    for (int r = 0; r < rows.length; r++) {
+      String row = rows[r];
+      float x = 800 - (row.length() * 104 - 8) / 2f;
+      for (int i = 0; i < row.length(); i++) {
+        char c = row.charAt(i);
+        button(String.valueOf(c), x + i * 104, ys[r], 96, 56, Style.NORMAL, () -> press(Character.toLowerCase(c)));
+      }
+    }
+    String letters = "ZXCVBNM";
+    float x3 = 292;
+    button("SHIFT", x3, 336, 140, 56, shift ? Style.SELECTED : Style.NORMAL, () -> shift = !shift);
+    for (int i = 0; i < letters.length(); i++) {
+      char c = letters.charAt(i);
+      button(String.valueOf(c), x3 + 148 + i * 104, 336, 96, 56, Style.NORMAL, () -> press(Character.toLowerCase(c)));
+    }
+    button("DEL", x3 + 148 + 7 * 104, 336, 140, 56, Style.NORMAL, this::backspace);
+    button("-", 444, 268, 96, 56, Style.NORMAL, () -> press('-'));
+    button("'", 548, 268, 96, 56, Style.NORMAL, () -> press('\''));
+    button("SPACE", 652, 268, 400, 56, Style.NORMAL, () -> press(' '));
+    button(".", 1060, 268, 96, 56, Style.NORMAL, () -> press('.'));
+    String next = "DONE";
+    if (editFlow) {
+      boolean more = false;
+      for (int i = editing + 1; i < humans; i++) if (!named[i]) more = true;
+      next = more ? "NEXT PLAYER" : "START GAME";
+    }
+    button(next, 1010, 106, 340, 56, Style.PRIMARY, this::finishEdit);
   }
 
   private void newMatch() {
+    saveSetup();
     attach(
         new GameEngine(
             app.board,
             humans,
             GameState.Difficulty.values()[difficulty],
-            Long.getLong("supremacy.seed", System.nanoTime())));
+            Long.getLong("supremacy.seed", System.nanoTime()),
+            List.of(seatName).subList(0, humans),
+            Arrays.copyOf(seatColor, humans)));
   }
 
   private List<String> visibleReport() {

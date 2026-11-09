@@ -214,7 +214,7 @@ public final class AtlasApp extends ApplicationAdapter {
         for(int i=0;i<board.regions.size();i++){
             Board.Region region=board.regions.get(i);float x=camera.screenX(region.anchor.x),y=camera.screenY(region.anchor.y);
             if(!camera.inside(x,y))continue;
-            Color owner=Color.valueOf(com.supremacy.game.GameState.COLORS[state.owners[i]]);
+            Color owner=Color.valueOf(state.color(state.owners[i]));
             float w=Math.max(2*r,width(counter,armyText(state.armies[i]))+r*.9f);
             GameHud.Role role=hud.role(i);
             switch(role){
@@ -388,11 +388,13 @@ public final class AtlasApp extends ApplicationAdapter {
             if(!hud.blocksBoard()&&camera.inside(p.x,p.y)){Board.Region tapped=pick(p.x,p.y);if(tapped!=null)hud.tap(board.regions.indexOf(tapped));else hud.tapOcean();}
             return true;
         }
+        @Override public boolean keyTyped(char character){return hud.typed(character);}
         @Override public boolean scrolled(float dx,float dy) {
             if(!hud.blocksBoard()&&camera.inside(mouse.x,mouse.y))camera.zoomAt((float)Math.pow(1.18,-dy),mouse.x,mouse.y);return true;
         }
         @Override public boolean keyDown(int key) {
             if(key==Input.Keys.ESCAPE||key==Input.Keys.BACK){hud.back();return true;}
+            if(hud.editKey(key))return true;
             if(hud.blocksBoard())return true;
             if(hud.key(key))return true;
             switch(key){
