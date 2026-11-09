@@ -362,15 +362,20 @@ class GameEngineTest {
   @Test
   void seededCompleteBotMatchesReachWorldConquest() {
     for (GameState.Difficulty difficulty : Arrays.asList(GameState.Difficulty.values())) {
-      GameEngine g = new GameEngine(board(), 1, difficulty, 721);
-      for (var p : g.state.players) p.human = false;
-      BotStrategy bots = new BotStrategy(g);
-      for (int actions = 0; actions < 50000 && g.state.phase != FINISHED; actions++) {
-        bots.step();
-        if (actions % 100 == 0) g.validate();
+      for (long seed : new long[] {721, 42, 2026}) {
+        GameEngine g = new GameEngine(board(), 1, difficulty, seed);
+        for (var p : g.state.players) p.human = false;
+        BotStrategy bots = new BotStrategy(g);
+        for (int actions = 0; actions < 50000 && g.state.phase != FINISHED; actions++) {
+          bots.step();
+          if (actions % 100 == 0) g.validate();
+        }
+        assertEquals(
+            FINISHED,
+            g.state.phase,
+            "Unfinished " + difficulty + " seed " + seed + " turn " + g.state.turn);
+        g.validate();
       }
-      assertEquals(FINISHED, g.state.phase, "Unfinished " + difficulty + " turn " + g.state.turn);
-      g.validate();
     }
   }
 }

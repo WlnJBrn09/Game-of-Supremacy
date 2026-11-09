@@ -48,7 +48,18 @@ Open borders allows **mutual transit during fortification**. Armies must finish 
 
 Bots use the same engine commands and legal moves as humans. They retain continent objectives between turns, evaluate reinforcements and border threats, plan attack chains with increasing lookahead, seek eliminations and continent completion, and move reserves toward useful fronts. They can propose territory swaps, adjacent aid and open borders, and accept/reject/counter offers. They do not inspect private enemy card faces or future dice.
 
-Higher difficulties increase planning depth and reduce decision noise; they do not receive extra armies or loaded dice. These are bounded strategic heuristics, not a trained opponent. AI turns run without dice animations or per-roll prompts. A report at the next human turn summarizes captures and unsuccessful attacks, eliminations, card trades and offer responses.
+Bots retain reachable continent objectives across turns, balancing conquest cost against income and the number of borders to defend. They estimate conquest chances from exact Risk dice distributions for battles up to 180 attacking and defending armies (a bounded approximation handles larger stacks). Campaign searches account for attrition, required garrisons, continent completion, breaking rival bonuses, elimination and counterattacks. Medium and above split reinforcement batches and retain defensive reserves; completed continents receive extra protection during movement and trade valuation.
+
+| Level | Additional campaign depth | Search nodes per candidate | Minimum conquest chance |
+| --- | ---: | ---: | ---: |
+| Beginner | 0 | 0 | 35% |
+| Easy | 1 | 20 | 50% |
+| Medium | 2 | 80 | 66% |
+| Hard | 3 | 240 | 73% |
+| MegaHard | 5 | 700 | 78% |
+| TeraHard | 7 | 1,800 | 80% |
+
+Beginner and Easy include decision noise; Medium and higher make deterministic evaluations of the visible board. Search limits bound mobile work, and deeper planning uses estimated remaining forces rather than simulating every possible dice outcome. Higher difficulties increase planning depth and reduce decision noise; they do not receive extra armies or loaded dice. These are bounded strategic heuristics, not a trained opponent. AI turns run without dice animations or per-roll prompts. A report at the next human turn summarizes captures and unsuccessful attacks, eliminations, card trades and offer responses.
 
 ## Saves
 

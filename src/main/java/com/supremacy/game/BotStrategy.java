@@ -8,6 +8,10 @@ import java.util.*;
 public final class BotStrategy {
   private final GameEngine game;
   private int plannedTurn = -1, actions;
+  private int searchBudget;
+  private static final int[] DEPTH = {0, 1, 2, 3, 5, 7};
+  private static final int[] BUDGET = {0, 20, 80, 240, 700, 1800};
+  private static final double[] CONFIDENCE = {.35, .50, .66, .73, .78, .80};
 
   public BotStrategy(GameEngine game) {
     this.game = game;
@@ -71,7 +75,9 @@ public final class BotStrategy {
         }
         if (s.reserve > 0) {
           int target = bestDeployment();
-          game.deploy(target, s.reserve);
+          // Allocate in batches so threatened bonus borders and campaign fronts both get troops.
+          long batch = s.difficulty.ordinal() < 2 ? s.reserve : Math.max(1, s.reserve / 4);
+          game.deploy(target, batch);
         } else game.finishDeployment();
       }
       case ATTACK -> {
@@ -87,14 +93,14 @@ public final class BotStrategy {
       case OCCUPY -> {
         int from = s.occupationFrom;
         long leave =
-            Math.max(1, Math.min(s.armies[from] - s.occupationMinimum, enemyPressure(from) / 2));
+            Math.max(1, Math.min(s.armies[from] - s.occupationMinimum, defenceReserve(from)));
         game.occupy(Math.max(s.occupationMinimum, s.armies[from] - leave));
       }
       case FORTIFY -> {
         int from = -1, to = -1;
         double best = 0;
         for (int a = 0; a < s.owners.length; a++)
-          if (s.owners[a] == s.active && game.movable(a) > 0) {
+          if (s.owners[a] == s.active && game.movable(a) > 0 && s.armies[a] > defenceReserve(a)) {
             for (int b = 0; b < s.owners.length; b++)
               if (a != b && s.owners[b] == s.active && game.connected(a, b, s.active)) {
                 double score = frontValue(b) - frontValue(a);
@@ -109,8 +115,8 @@ public final class BotStrategy {
           game.endTurn();
           return;
         }
-        long amount = game.movable(from);
-        if (enemyPressure(from) > 0) amount = Math.max(0, amount - enemyPressure(from) / 2);
+        long amount =
+            Math.min(game.movable(from), Math.max(0, s.armies[from] - defenceReserve(from)));
         if (amount > 0) game.fortify(from, to, amount);
         else game.endTurn();
       }
@@ -120,29 +126,49 @@ public final class BotStrategy {
 
   private void chooseObjective() {
     GameState s = game.state;
-    if (s.phase == SETUP || s.phase == FINISHED) return;
+    if (s.phase == FINISHED) return;
     String old = s.players.get(s.active).objective;
     double best = -Double.MAX_VALUE;
     String chosen = old;
     for (var c : game.board.continents) {
       int total = 0, owned = 0;
       long resistance = 0;
-      int borders = 0;
       for (int i = 0; i < s.owners.length; i++)
         if (game.board.regions.get(i).continent == c) {
           total++;
           if (s.owners[i] == s.active) {
             owned++;
-            for (int n : game.neighbours(i)) if (s.owners[n] != s.active) borders++;
           } else resistance += s.armies[i];
         }
+      if (owned == total) continue;
+      // Prefer a reachable, affordable campaign; retain a viable goal across turns.
+      int access = 0, perimeter = 0;
+      double force = 0;
+      for (int i = 0; i < s.owners.length; i++) {
+        if (s.owners[i] == s.active) {
+          boolean reaches = game.board.regions.get(i).continent == c;
+          for (int n : game.neighbours(i))
+            if (game.board.regions.get(n).continent == c) reaches = true;
+          if (reaches) {
+            access++;
+            force += Math.max(0, s.armies[i] - 1);
+          }
+        }
+        if (game.board.regions.get(i).continent == c) {
+          for (int n : game.neighbours(i))
+            if (game.board.regions.get(n).continent != c) {
+              perimeter++;
+              break;
+            }
+        }
+      }
+      if (access == 0) continue;
+      double cost = resistance * .9 + total - owned;
       double score =
-          owned * 7.0 / Math.max(1, total)
-              + GameEngine.BONUSES.get(c.name()) * .55
-              - Math.log1p(resistance) * .45
-              - borders * .08
-              + (c.name().equals(old) ? 1.25 : 0);
-      if (owned == total) score -= 6;
+          owned * 8.0 / total
+              + GameEngine.BONUSES.get(c.name()) * 2.0 / (1 + perimeter * .3)
+              - cost / Math.max(4, force + s.reserve) * 3
+              + (c.name().equals(old) ? 1.8 : 0);
       if (score > best) {
         best = score;
         chosen = c.name();
@@ -151,14 +177,31 @@ public final class BotStrategy {
     s.players.get(s.active).objective = chosen;
   }
 
+  private boolean ownsContinent(int player, int region) {
+    var c = game.board.regions.get(region).continent;
+    for (int i = 0; i < game.state.owners.length; i++)
+      if (game.board.regions.get(i).continent == c && game.state.owners[i] != player) return false;
+    return true;
+  }
+
+  private long defenceReserve(int r) {
+    long strongest = 0;
+    for (int n : game.neighbours(r))
+      if (game.state.owners[n] != game.state.active)
+        strongest = Math.max(strongest, game.state.armies[n] - 1);
+    if (strongest == 0) return 1;
+    double fraction = ownsContinent(game.state.active, r) ? .85 : .35;
+    return Math.max(1, (long) Math.ceil(strongest * fraction));
+  }
+
   private double frontValue(int r) {
     GameState s = game.state;
-    double threat = enemyPressure(r);
-    if (threat == 0) return -10;
-    return threat * .6
-        - s.armies[r] * .45
+    if (enemyPressure(r) == 0) return -10 - s.armies[r] * .01;
+    double deficit = defenceReserve(r) - s.armies[r];
+    return Math.max(-8, deficit) * (ownsContinent(s.active, r) ? 2 : .5)
+        - Math.log1p(s.armies[r])
         + (game.board.regions.get(r).continent.name().equals(s.players.get(s.active).objective)
-            ? 7
+            ? 4
             : 0);
   }
 
@@ -189,73 +232,86 @@ public final class BotStrategy {
   private int[] bestAttack() {
     GameState s = game.state;
     int level = s.difficulty.ordinal();
-    double best = level < 2 ? -8 : 0;
+    double best = 0;
     int[] result = null;
     for (int a = 0; a < s.owners.length; a++)
       if (s.owners[a] == s.active && s.armies[a] > 1)
-        for (int b : game.neighbours(a))
-          if (game.canAttack(a, b)) {
-            double ratio = (s.armies[a] - 1.0) / s.armies[b];
-            double threshold = new double[] {.65, .85, 1.05, 1.15, 1.2, 1.25}[level];
-            if (ratio < threshold) continue;
-            double score = Math.log1p(ratio) * 3 - 2;
-            String goal = s.players.get(s.active).objective;
-            if (game.board.regions.get(b).continent.name().equals(goal)) score += 4;
-            int remaining = 0;
-            boolean ownedEnemyContinent = true;
-            var c = game.board.regions.get(b).continent;
-            for (int r = 0; r < s.owners.length; r++)
-              if (game.board.regions.get(r).continent == c) {
-                if (s.owners[r] != s.active) remaining++;
-                if (s.owners[r] != s.owners[b]) ownedEnemyContinent = false;
-              }
-            if (remaining == 1) score += GameEngine.BONUSES.get(c.name()) * 2;
-            if (ownedEnemyContinent) score += GameEngine.BONUSES.get(c.name());
-            if (game.count(s.owners[b]) == 1) score += 12;
-            if (level >= 2) {
-              boolean[] seen = new boolean[s.owners.length];
-              score +=
-                  lookAhead(
-                          b,
-                          Math.max(0, s.armies[a] - 1 - s.armies[b] * 1.1),
-                          Math.min(4, level - 1),
-                          seen)
-                      * .5;
-              double exposed = Math.max(0, enemyPressure(a) - (s.armies[a] - 1));
-              score -= Math.log1p(exposed) * .7;
-            }
-            if (level < 3) score += (game.random(101) / 100.0 - .5) * (4 - level);
-            if (score > best) {
-              best = score;
-              result = new int[] {a, b};
-            }
+        for (int b : game.neighbours(a)) {
+          if (!game.canAttack(a, b)) continue;
+          double force = s.armies[a] - 1.0;
+          double odds = BattleOdds.win(force, s.armies[b]);
+          if (odds < CONFIDENCE[level]) continue;
+          boolean[] captured = new boolean[s.owners.length];
+          captured[b] = true;
+          double remaining = Math.max(0, force - s.armies[b] * .9 - 1);
+          double reward = captureValue(b, captured) + (!s.conquered ? 3 : 0);
+          searchBudget = BUDGET[level];
+          reward += campaign(b, remaining, DEPTH[level], captured) * .5;
+          double exposure = 0;
+          if (level >= 2) {
+            // The campaign must also survive the other four players' next turns.
+            double retaliation = 0;
+            for (int n : game.neighbours(b))
+              if (s.owners[n] != s.active && !captured[n])
+                retaliation = Math.max(retaliation, s.armies[n] - 1.0);
+            exposure = Math.max(0, retaliation - remaining) / Math.max(1, force) * 4;
+            if (ownsContinent(s.active, a))
+              exposure +=
+                  Math.max(0, defenceReserve(a) - (s.armies[a] - force)) / Math.max(1, force) * 4;
           }
+          double score =
+              odds * reward
+                  - (1 - odds) * Math.min(force, 30)
+                  - s.armies[b] / Math.max(1, force) * 3
+                  - exposure;
+          if (level < 2) score += (game.random(101) / 100.0 - .5) * (3 - level);
+          if (score > best) {
+            best = score;
+            result = new int[] {a, b};
+          }
+        }
     return result;
   }
 
-  private double lookAhead(int r, double force, int depth, boolean[] seen) {
-    if (depth == 0 || force < 2) return 0;
-    seen[r] = true;
+  private double captureValue(int r, boolean[] captured) {
+    GameState s = game.state;
+    var continent = game.board.regions.get(r).continent;
+    int missing = 0, enemyRemaining = 0;
+    boolean enemyBonus = ownsContinent(s.owners[r], r);
+    for (int i = 0; i < s.owners.length; i++)
+      if (i != r && captured[i] && game.board.regions.get(i).continent == continent)
+        enemyBonus = false;
+    for (int i = 0; i < s.owners.length; i++) {
+      if (!captured[i]
+          && s.owners[i] != s.active
+          && game.board.regions.get(i).continent == continent) missing++;
+      if (!captured[i] && s.owners[i] == s.owners[r]) enemyRemaining++;
+    }
+    double value = 2;
+    if (continent.name().equals(s.players.get(s.active).objective)) value += 3;
+    if (missing == 0) value += GameEngine.BONUSES.get(continent.name()) * 8;
+    if (enemyBonus) value += GameEngine.BONUSES.get(continent.name()) * 2;
+    if (enemyRemaining == 0) value += 12; // Never inspect another player's private cards.
+    return value;
+  }
+
+  private double campaign(int r, double force, int depth, boolean[] captured) {
+    if (depth == 0 || force < 2 || searchBudget-- <= 0) return 0;
     double best = 0;
-    for (int n : game.neighbours(r))
-      if (!seen[n] && game.state.owners[n] != game.state.active) {
-        double left = force - game.state.armies[n] * 1.1;
-        if (left > 1) {
-          double score =
-              1
-                  + (game.board
-                          .regions
-                          .get(n)
-                          .continent
-                          .name()
-                          .equals(game.state.players.get(game.state.active).objective)
-                      ? 2
-                      : 0)
-                  + lookAhead(n, left, depth - 1, seen);
-          best = Math.max(best, score);
-        }
-      }
-    seen[r] = false;
+    for (int n : game.neighbours(r)) {
+      if (captured[n] || game.state.owners[n] == game.state.active) continue;
+      double odds = BattleOdds.win(force, game.state.armies[n]);
+      if (odds < CONFIDENCE[game.state.difficulty.ordinal()]) continue;
+      captured[n] = true;
+      double remaining = force - game.state.armies[n] * .9 - 1;
+      double value =
+          odds * (captureValue(n, captured) + .55 * campaign(n, remaining, depth - 1, captured))
+              - game.state.armies[n] / Math.max(1, force) * 4
+              - (1 - odds) * Math.min(force, 30);
+      captured[n] = false;
+      best = Math.max(best, value);
+      if (searchBudget <= 0) break;
+    }
     return best;
   }
 
@@ -276,7 +332,9 @@ public final class BotStrategy {
   }
 
   private double territoryValue(int r) {
-    return 6
+    return (ownsContinent(game.state.active, r)
+            ? 6 + GameEngine.BONUSES.get(game.board.regions.get(r).continent.name()) * 4
+            : 6)
         + (game.board
                 .regions
                 .get(r)
