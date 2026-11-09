@@ -1,14 +1,8 @@
 target/
 .idea/
-*.iml
+.vscode/
 .DS_Store
-.mvn/wrapper/maven-wrapper.jar
 tools/cache/
-__pycache__/
-
-tools/.venv/
-.gradle/
-**/build/
 local.properties
 *.jks
 *.keystore

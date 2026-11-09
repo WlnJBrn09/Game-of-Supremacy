@@ -8,22 +8,32 @@ The generator groups countries and administrative subdivisions, simplifies coast
 
 ## Fonts
 
-Noto Sans Regular and Noto Serif Regular are bundled under the SIL Open Font License 1.1. The copyright and license notice is included at `src/main/resources/fonts/LICENSE.txt`.
+Noto Sans Regular and Noto Serif Regular are bundled under the SIL Open Font License 1.1. The copyright and license notice is included at `assets/fonts/LICENSE.txt`.
 
-## Runtime and build libraries
+## Runtime libraries
 
-- libGDX: Apache License 2.0 — https://github.com/libgdx/libgdx
-- LWJGL: BSD license — https://www.lwjgl.org/license
-- Maven Wrapper: Apache License 2.0 — https://github.com/apache/maven-wrapper
-- JUnit (test dependency): Eclipse Public License 2.0 — https://junit.org/junit5/
-- Shapely (optional map-generation dependency): BSD 3-Clause — https://github.com/shapely/shapely
+The game links these Rust crates (and their dependencies, all under permissive licenses):
 
-Upstream notices packaged in dependency JARs remain in the bundled build. All nautical decorations and UI artwork are original vector drawings made for this board. Risk is mentioned only to describe the requested game style; no Risk logo, board image, or proprietary artwork is included.
+- macroquad and miniquad (window, input, rendering, audio; MIT OR Apache-2.0) — https://github.com/not-fl3/macroquad. The Android activity glue (`MainActivity.java`, `QuadNative.java`) is miniquad's own, compiled into the APK.
+- fontdue (font rasterization; MIT OR Apache-2.0 OR Zlib) — https://github.com/mooman219/fontdue
+- quad-snd (audio; MIT OR Apache-2.0) — https://github.com/not-fl3/quad-snd
+- serde and serde_json (saves and board data; MIT OR Apache-2.0) — https://serde.rs
+- tempfile (tests only; MIT OR Apache-2.0)
+
+Run `cargo tree` for the full dependency list.
+
+## Board generator (optional)
+
+`tools/board-gen` additionally uses GEOS (LGPL-2.1, compiled from source via the `geos`/`geos-sys`/`geos-src` crates; MIT) — https://libgeos.org; `sha2` and `ureq` (MIT OR Apache-2.0). None of these are part of the game or the APK.
 
 ## Game audio
 
 The short dice and conquest WAV effects are original procedurally synthesized sounds generated for this project. No external sound recordings are bundled.
 
+## Artwork
+
+All nautical decorations and UI artwork are original vector drawings made for this board. Risk is mentioned only to describe the requested game style; no Risk logo, board image, or proprietary artwork is included.
+
 ## Android build
 
-The Android project uses Android Gradle Plugin and the Android SDK at build time; SDK tools, emulator images and signing keys are not included in this repository. Core library desugaring uses Google's `desugar_jdk_libs` (GPLv2 with Classpath Exception) — https://github.com/google/desugar_jdk_libs. AndroidX support libraries are Apache License 2.0 — https://android.googlesource.com/platform/frameworks/support/.
+The APK is built with the Android SDK and NDK at build time; SDK tools, emulator images and signing keys are not included in this repository.

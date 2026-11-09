@@ -1,0 +1,38 @@
+[workspace]
+members = [".", "tools/board-gen"]
+
+[package]
+name = "supremacy"
+version = "0.3.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Game of Supremacy: an offline five-player conquest board game for Android and desktop"
+publish = false
+default-run = "supremacy"
+
+[lib]
+name = "supremacy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "supremacy"
+path = "src/main.rs"
+
+[dependencies]
+macroquad = { version = "0.4.14", default-features = false, features = ["audio"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+# Android builds the library as a cdylib: see android/build-apk.sh.
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
