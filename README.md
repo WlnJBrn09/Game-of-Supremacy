@@ -8,7 +8,7 @@ An offline, five-player world-conquest game for Android, written in Java with li
 
 - **Five players, always.** One to five humans share a device (pass-and-play). Charles, George, Douglas and Dan fill the remaining seats.
 - **Six bot difficulties:** Beginner, Easy, Medium, Hard, MegaHard and TeraHard. Higher levels plan deeper; none get extra armies or loaded dice.
-- **Custom board:** seven continents, 112 land connections, 34 sea lanes and sea lanes across the Pacific, generated from Natural Earth data.
+- **Custom board:** seven continents, 112 land connections, 34 sea lanes (including Pacific crossings), generated from Natural Earth data.
 - **Diplomacy:** territory swaps, adjacent army gifts and open borders, with counteroffers.
 - **Private hands:** a handover screen hides cards between human turns.
 - **Autosave** after every action, with backup recovery.
