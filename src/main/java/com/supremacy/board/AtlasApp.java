@@ -306,7 +306,7 @@ public final class AtlasApp extends ApplicationAdapter {
             text(small,other.name,1314,y,WHITE);text(small,e.kind()==Board.Kind.SEA?"SEA":"LAND",1518,y,e.kind()==Board.Kind.SEA?GOLD:MUTED);batch.end();
             hits.add(new Hit(new Rectangle(1284,y-20,268,25),()->{select(other);camera.focus(other);}));
         }
-        float summaryY=Math.min(220,570-links.size()*25);
+        float summaryY=Math.min(250,570-links.size()*25);
         batch.begin();text(small,links.size()+" CONNECTIONS   /   "+sea+" SEA LANES",1284,summaryY,GOLD);
         String includes=current.includes.length()>125?current.includes.substring(0,122)+"...":current.includes;
         wrap(small,"Includes: "+includes,1284,summaryY-28,268,MUTED);batch.end();
