@@ -1,10 +1,12 @@
 # Game of Supremacy
 
-An **offline Android conquest game in Java/libGDX**, built around a custom 71-territory world board. Play with exactly five participants: one to five humans sharing a device, filled out by Charles, George, Douglas and Dan.
+An **offline Android conquest game in Java/libGDX**, built around a custom 72-territory world board. Play with exactly five participants: one to five humans sharing a device, filled out by Charles, George, Douglas and Dan.
 
-The board stays directly overhead. Armies are numbered circles in player colours. Matches include random territories, 55 starting armies per player, Risk dice and escalating cards, world conquest, private hands, automatic saves, asynchronous trade offers, adjacent army gifts and open borders. Six shared AI difficulties use persistent objectives and progressively deeper planning; bot turns are summarized at the next human turn.
+The board stays directly overhead. Armies are numbered game-piece tokens in player colours, and play is laid out like the classic board game: the world map on top, a command console underneath with the commanders, the phase track (Reinforce → Attack → Fortify) and one big next-step button. Matches include random territories, 55 starting armies per player, Risk dice and escalating cards, world conquest, private hands, automatic saves, asynchronous trade offers, adjacent army gifts and open borders. Six shared AI difficulties use persistent objectives and progressively deeper planning; bot turns are summarized at the next human turn.
 
 ![Game screen](docs/game-preview.png)
+
+![Player setup](docs/players-preview.png)
 
 See [the full rules and chosen defaults](docs/GAME_RULES.md), [territory groupings](docs/TERRITORIES.md), and [verification](docs/VERIFICATION.md).
 
@@ -36,14 +38,20 @@ On macOS add `-XstartOnFirstThread` to the Java command. On Windows use `mvnw.cm
 
 ## Playing
 
-Choose the number of humans and one shared bot difficulty, then start a match. During setup, tap one of your territories (or use **Choose territory**), set an amount and deploy. Place the entire reserve, then finish setup. A handover screen identifies the next human.
+On the title screen, tap a seat to switch it between **Human** and **Computer**, pick one computer skill level, and start a new game (or resume the autosave). Every human types a name and chooses a colour: tap a human's name to open the player editor (it has its own on-screen keyboard, so it works on a phone with no system keyboard), or just press **Start new game** and you are asked for each unnamed player in turn. Names are up to 12 characters and must be unique, including against the computer players in the game; if you pick a colour another human holds, the two swap. Computers take the remaining colours. Names and colours are remembered between launches. With one human there is no pass-the-device screen; with several, a handover screen keeps each player's cards private.
 
-Each turn proceeds through **Reinforce → Attack → Occupy captured land → Fortify → End turn**. Tap your territory and an adjacent enemy to attack. Each roll is a separate decision; defending dice are automatic. During fortification, tap a source and destination; use Choose territory to reset the source. Pinch or use the zoom buttons to zoom, and drag to pan. Private cards, reports, diplomacy and rules are available from the top controls. The app saves every action and hides private cards when paused.
+The console under the map always tells you what to do next:
+
+- **Reinforce / initial placement:** your territories are ringed in gold. Tap one, drag the slider (or use − / +) and tap **Place**. The big button stays locked until every army is placed; once your last army is down and you have no card set to trade, the game moves straight to Attack. A **Trade cards** button appears whenever you hold a matching set, and the console shows where your reinforcements came from.
+- **Attack:** tap one of your ringed territories, then a pulsing enemy neighbour, or tap the enemy first and your strongest bordering territory is picked for you. Pick 1–3 dice and **Roll**, or **Blitz** to keep rolling with maximum dice until you capture it or run out of attackers. The console shows the win chance and every roll's dice, with the losing die of each pair faded. After a capture, drag the slider to choose how many armies move in; your next attack starts from the captured territory.
+- **Fortify:** tap a territory, then one of the highlighted connected destinations, and move armies. **End turn** when done.
+
+The **Continent bonuses** panel on the map shows each bonus, your progress and who holds a whole continent; tap its header to hide it. Tap an opponent in the commander list to open diplomacy with them. **Cards**, **Diplomacy**, **Log** and **Menu** are in the top bar. Drag to pan; pinch, scroll or use + / − / **Fit** to zoom. On desktop, hovering a territory shows its owner and armies; Enter performs the next step, R rolls, B blitzes and Esc goes back. The app saves after every action and hides private cards when paused.
 
 ## Geography and implementation
 
-Seven continents: North America, South America, Europe, Africa, Asia, Australia and Middle-East. The board retains the requested revisions: Yakutsk and Irkutsk; Belgium with France; Tanzania with Ethiopia; Tasmania with Victoria; Chad divided among Mali, Egypt and Ethiopia; northern Mauritania with Algeria. It has 112 land connections and 34 sea lanes, with original nautical decoration and Pacific wrapping.
+Seven continents: North America, South America, Europe, Africa, Asia, Australia and Middle-East. The board retains the requested revisions: Yakutsk and Irkutsk; Belgium with France; Tanzania with Ethiopia; Tasmania with Victoria; Chad as its own territory with Cameroon, the Central African Republic and eastern Niger; northern Mauritania with Algeria. It has 113 land connections and 34 sea lanes, with original nautical decoration and Pacific wrapping.
 
-`GameEngine` owns rules and validates commands independently of the screen or bot. `GameState` is versioned save data. `BotStrategy` plans through the same commands as humans. `SaveStore` handles durable JSON saves and recovery. `AtlasApp` draws the map and touch controls; `GameHud` manages setup, handovers, cards, offers and reports. `DesktopLauncher` and `AndroidLauncher` use the same game.
+`GameEngine` owns rules and validates commands independently of the screen or bot. `GameState` is versioned save data. `BotStrategy` plans through the same commands as humans. `SaveStore` handles durable JSON saves and recovery. `AtlasApp` draws the map, army tokens and touch controls; `GameHud` draws the command console and manages setup, handovers, cards, offers and reports. `DesktopLauncher` and `AndroidLauncher` use the same game.
 
 The checked-in board is generated from pinned public-domain Natural Earth sources. To modify it, install `tools/requirements.txt` in a virtual environment and run `python tools/generate_board.py`; Python is not needed to build or play. See [third-party notices](docs/THIRD_PARTY.md).

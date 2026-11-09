@@ -47,7 +47,7 @@ class GameEngineTest {
     assertEquals(
         List.of("Player 1", "Charles", "George", "Douglas", "Dan"),
         g.state.players.stream().map(p -> p.name).toList());
-    assertEquals(71, Arrays.stream(g.state.owners).count());
+    assertEquals(72, Arrays.stream(g.state.owners).count());
     finishSetup(g);
     for (int p = 0; p < 5; p++) assertEquals(55, g.total(p));
     assertEquals(REINFORCE, g.state.phase);
@@ -130,7 +130,8 @@ class GameEngineTest {
     assertEquals(15, g.nextSetValue());
     g.state.tradeCount = 6;
     assertEquals(20, g.nextSetValue());
-    assertTrue(g.validSet(List.of(0, 1, 71)));
+    assertTrue(g.validSet(List.of(0, 1, g.state.owners.length)));
+    assertEquals(3, g.symbol(g.state.owners.length));
     assertFalse(g.validSet(List.of(0, 3, 1)));
     g.validate();
   }
@@ -377,5 +378,80 @@ class GameEngineTest {
         g.validate();
       }
     }
+  }
+
+  @Test
+  void conquestChanceReflectsBothStacksWithoutUsingRandomness() {
+    GameEngine g = game();
+    finishSetup(g);
+    assign(g, "Brazil", 0, 2);
+    assign(g, "Peru", 1, 5);
+    long rng = g.state.rng;
+    double weak = g.conquestChance(g.index("Brazil"), g.index("Peru"));
+    g.state.armies[g.index("Brazil")] = 30;
+    double strong = g.conquestChance(g.index("Brazil"), g.index("Peru"));
+    assertTrue(weak < .05 && strong > .95 && strong <= 1, weak + " " + strong);
+    assertEquals(rng, g.state.rng);
+  }
+
+  @Test
+  void humansChooseNamesAndColoursAndComputersTakeTheRest() {
+    GameEngine g =
+        new GameEngine(
+            board(),
+            2,
+            GameState.Difficulty.Medium,
+            7,
+            List.of("  Waylon   B ", "Dan"),
+            new int[] {1, 7});
+    List<GameState.Player> players = g.state.players;
+    assertEquals("Waylon B", players.get(0).name);
+    assertEquals("Dan", players.get(1).name);
+    assertEquals(List.of("Charles", "George", "Douglas"), players.stream().skip(2).map(p -> p.name).toList());
+    assertEquals(1, players.get(0).color);
+    assertEquals(7, players.get(1).color);
+    assertEquals(5, players.stream().mapToInt(p -> p.color).distinct().count());
+    // Computers keep their traditional colour when free and never reuse a human's.
+    assertEquals(2, players.get(2).color);
+    assertEquals(3, players.get(3).color);
+    assertEquals(4, players.get(4).color);
+    assertEquals("4D9EC4", g.state.color(0));
+    g.validate();
+  }
+
+  @Test
+  void rejectsDuplicateOrInvalidNamesAndColours() {
+    Board b = board();
+    var d = GameState.Difficulty.Easy;
+    assertThrows(IllegalArgumentException.class, () -> new GameEngine(b, 2, d, 1, List.of("Sam", "sam"), null));
+    assertThrows(IllegalArgumentException.class, () -> new GameEngine(b, 1, d, 1, List.of("charles"), null));
+    assertThrows(IllegalArgumentException.class, () -> new GameEngine(b, 1, d, 1, List.of("ThisNameIsFarTooLong"), null));
+    assertThrows(IllegalArgumentException.class, () -> new GameEngine(b, 2, d, 1, null, new int[] {3, 3}));
+    assertThrows(IllegalArgumentException.class, () -> new GameEngine(b, 1, d, 1, null, new int[] {8}));
+    // A blank name falls back to the default seat name.
+    assertEquals("Player 1", new GameEngine(b, 1, d, 1, List.of("  "), null).state.players.get(0).name);
+  }
+
+  @Test
+  void colourAssignmentSkipsHumanChoices() {
+    assertArrayEquals(new int[] {2, 1, 0, 3, 4}, GameEngine.assignColors(1, new int[] {2}));
+    assertArrayEquals(new int[] {4, 5, 2, 3, 0}, GameEngine.assignColors(2, new int[] {4, 5}));
+  }
+
+  @Test
+  void namesAndColoursSurviveSavesAndOldSavesGetDefaultColours(@TempDir Path dir) {
+    Board b = board();
+    GameEngine g = new GameEngine(b, 1, GameState.Difficulty.Hard, 99, List.of("Waylon"), new int[] {6});
+    SaveStore store = new SaveStore(dir.resolve("autosave.json"));
+    store.save(g);
+    GameEngine loaded = store.load(b);
+    assertEquals("Waylon", loaded.state.players.get(0).name);
+    assertEquals(6, loaded.state.players.get(0).color);
+    assertEquals(g.state.color(3), loaded.state.color(3));
+    // A save written before colours existed has colour -1 everywhere.
+    GameState legacy = loaded.state;
+    for (GameState.Player p : legacy.players) p.color = -1;
+    GameEngine migrated = new GameEngine(b, legacy);
+    for (int i = 0; i < 5; i++) assertEquals(i, migrated.state.players.get(i).color);
   }
 }

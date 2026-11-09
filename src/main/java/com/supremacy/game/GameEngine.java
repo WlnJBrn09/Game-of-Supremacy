@@ -29,6 +29,20 @@ public final class GameEngine {
   private Runnable listener = () -> {};
 
   public GameEngine(Board board, int humans, GameState.Difficulty difficulty, long seed) {
+    this(board, humans, difficulty, seed, null, null);
+  }
+
+  /**
+   * Starts a match. {@code humanNames} and {@code humanColors} (palette indexes) describe the human
+   * seats in order; null entries use defaults. Computer players take the remaining colours.
+   */
+  public GameEngine(
+      Board board,
+      int humans,
+      GameState.Difficulty difficulty,
+      long seed,
+      List<String> humanNames,
+      int[] humanColors) {
     check(humans >= 1 && humans <= 5, "Choose one to five humans");
     this.board = board;
     state = new GameState();
@@ -39,12 +53,22 @@ public final class GameEngine {
     state.armies = new long[n];
     state.moved = new long[n];
     for (Board.Region r : board.regions) state.territoryIds.add(r.id);
+    int[] colors = assignColors(humans, humanColors);
     for (int i = 0; i < 5; i++) {
       GameState.Player p = new GameState.Player();
       p.human = i < humans;
-      p.name = p.human ? "Player " + (i + 1) : GameState.BOT_NAMES[i - humans];
+      p.color = colors[i];
+      String chosen =
+          p.human && humanNames != null && i < humanNames.size() ? humanNames.get(i) : null;
+      p.name =
+          p.human
+              ? (chosen == null || chosen.isBlank() ? "Player " + (i + 1) : cleanName(chosen))
+              : GameState.BOT_NAMES[i - humans];
       state.players.add(p);
     }
+    Set<String> seen = new HashSet<>();
+    for (GameState.Player p : state.players)
+      check(seen.add(p.name.toLowerCase(Locale.ROOT)), "Two players are named " + p.name);
     adjacent = adjacency();
     List<Integer> deal = new ArrayList<>();
     for (int i = 0; i < n; i++) deal.add(i);
@@ -59,9 +83,43 @@ public final class GameEngine {
     log("Random territories assigned. Each player starts with 55 armies.");
   }
 
+  /** Names are trimmed, single-spaced and limited to {@link GameState#MAX_NAME} characters. */
+  public static String cleanName(String raw) {
+    String name = raw.trim().replaceAll("\\s+", " ");
+    check(!name.isEmpty(), "Enter a name");
+    check(name.length() <= GameState.MAX_NAME, "Names can have up to 12 characters");
+    return name;
+  }
+
+  /**
+   * Colours for all five seats: humans keep their (distinct) choice and computer players take their
+   * traditional colour when it is free, otherwise the first unused one.
+   */
+  public static int[] assignColors(int humans, int[] humanColors) {
+    int[] result = new int[5];
+    boolean[] used = new boolean[GameState.COLORS.length];
+    for (int i = 0; i < humans; i++) {
+      int c = humanColors != null && i < humanColors.length ? humanColors[i] : i;
+      check(c >= 0 && c < used.length, "Unknown colour");
+      check(!used[c], "Two players chose " + GameState.COLOR_NAMES[c]);
+      used[c] = true;
+      result[i] = c;
+    }
+    for (int i = humans; i < 5; i++) {
+      int c = used[i] ? -1 : i;
+      for (int k = 0; c < 0 && k < used.length; k++) if (!used[k]) c = k;
+      used[c] = true;
+      result[i] = c;
+    }
+    return result;
+  }
+
   public GameEngine(Board board, GameState restored) {
     this.board = board;
     this.state = restored;
+    // Saves from before colours were selectable carry no colour.
+    if (state.players.stream().anyMatch(p -> p.color < 0))
+      for (int i = 0; i < state.players.size(); i++) state.players.get(i).color = i;
     adjacent = adjacency();
     validate();
   }
@@ -151,6 +209,13 @@ public final class GameEngine {
         && state.owners[to] != state.active
         && state.armies[from] > 1
         && adjacent(from, to);
+  }
+
+  /** Chance that attacking with every spare army eventually conquers {@code to}. */
+  public double conquestChance(int from, int to) {
+    region(from);
+    region(to);
+    return BattleOdds.win(state.armies[from] - 1, state.armies[to]);
   }
 
   public void deploy(int r, long amount) {
@@ -736,6 +801,14 @@ public final class GameEngine {
 
   public void validate() {
     check(state.version == 1 && state.players.size() == 5, "Unsupported or corrupt save");
+    check(
+        state.players.stream()
+                .mapToInt(p -> p.color)
+                .filter(c -> c >= 0 && c < GameState.COLORS.length)
+                .distinct()
+                .count()
+            == 5,
+        "Invalid player colours");
     check(
         state.active >= 0
             && state.active < 5

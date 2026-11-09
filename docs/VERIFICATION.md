@@ -2,16 +2,16 @@
 
 ## Builds
 
-- `./gradlew :core:test :android:assembleDebug` succeeds with JDK 21, Gradle 8.9, Android Gradle Plugin 8.7.3, SDK 35 and build tools 35.0.0.
+- `:core:test :android:assembleDebug` succeeds with JDK 21, Android Gradle Plugin 8.7.3, SDK platform 35 and build tools 35.0.0. For the current APK it was run with a locally installed Gradle 8.14.3 (`gradle :core:test :android:assembleDebug`) because the wrapper's Gradle 8.9 download host was not reachable; the wrapper command in the README is unchanged and was last run with 8.9.
 - `./mvnw verify` builds the shared game and desktop launcher with Java 17 bytecode.
-- APK manifest inspection confirms minimum Android API 26, landscape orientation, ARMv7/ARM64/x86-64 native libraries, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.
+- Inspection of the current APK (`aapt2`/`apksigner`) confirms package `com.supremacy.game`, minimum Android API 26, target 35, sensor-landscape orientation, ARMv7/ARM64/x86-64 native libraries, the 72-territory `board.json`, the new player-setup code, a valid v2 signature, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.
 - The installable debug APK is included in `downloads/`, with a SHA-256 digest. SDKs, emulator images, caches, signing keys and environment-specific proxy configuration are excluded.
 
 ## Automated rules checks
 
-**25 tests pass:** five board tests, sixteen game tests and four bot-strategy tests. Bot coverage checks exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritizing continent completion, reinforcement batching and persistent objectives. The full-match test runs three seeds at each of the six difficulties (18 completed matches).
+**30 tests pass** (Maven and Gradle give the same result): five board tests, twenty-one game tests and four bot-strategy tests. Bot coverage checks exact conquest odds, probability monotonicity, declining hopeless battles at every level, prioritizing continent completion, reinforcement batching and persistent objectives. The full-match test runs three seeds at each of the six difficulties (18 completed matches).
 
-Coverage includes the 71-territory geography and requested custom assignments; connected/symmetric topology; polygon triangulation and hit testing; fixed overhead camera; five-player random setup and 55 armies each; population income; defending ties; conquest/occupation/world victory; repeated fortification and open-border transit; escalating sets and matched-land bonuses; elimination cards and forced trade/deployment; immediate offers, stale offers and counteroffers; garrison redistribution and army conservation; movement history after trades; autosave, random-state preservation, backup recovery and pending occupation; and seeded complete bot matches reaching world conquest at all six difficulties.
+Coverage includes player names and colours (trimming, defaults, duplicate and over-long names, duplicate colours, computer colour assignment, save round-trip and migration of saves written before colours existed); the 72-territory geography and requested custom assignments; connected/symmetric topology; polygon triangulation and hit testing; fixed overhead camera; five-player random setup and 55 armies each; population income; defending ties; conquest/occupation/world victory; repeated fortification and open-border transit; escalating sets and matched-land bonuses; elimination cards and forced trade/deployment; immediate offers, stale offers and counteroffers; garrison redistribution and army conservation; movement history after trades; autosave, random-state preservation, backup recovery and pending occupation; and seeded complete bot matches reaching world conquest at all six difficulties.
 
 ## Interactive game checks
 
@@ -22,6 +22,10 @@ Exercised the actual libGDX desktop game under Xvfb/Mesa using keyboard/pointer 
 - Quiet bot turns and the next human's report/handover.
 - Resuming an autosave, rolling a real battle, occupying captured land, advancing to a second human and checking that their private cards are separated by the handover screen.
 - The map uses the existing orthographic pan/zoom transform; Android adds two-finger pinch zoom.
+
+The console redesign (game-piece army tokens, phase track, roster, slider placement, blitz, win chance, dice results, card faces, continent panel and victory screen) was checked the same way with a seeded match (`-Dsupremacy.seed=42`): seat/skill selection, initial placement with the slider, automatic advance to Attack, auto-picked attack source, single rolls and blitz, occupation, continuing the attack from captured land, fortifying, ending the turn, the next turn's loss summary, cards, diplomacy, log, pause menu, a two-human handover and a forged near-victory save played through to world conquest.
+
+Player setup was checked the same way: an unnamed human is asked for a name when starting, typing with the on-screen keys and a physical keyboard, capitalisation, colour swap, duplicate-name rejection, the Next player → Start game flow for two humans, and the chosen name and colour appearing on the map, roster, header and handover screen.
 
 `game-preview.png`, `diplomacy-preview.png` and `handover-preview.png` are screenshots from that shared desktop runtime. They are not Android-device screenshots.
 

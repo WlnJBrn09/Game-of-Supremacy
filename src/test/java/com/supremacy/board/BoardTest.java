@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class BoardTest {
     private Board load() { return new Board(new InputStreamReader(Objects.requireNonNull(getClass().getResourceAsStream("/board.json")),StandardCharsets.UTF_8)); }
     @Test void includesRequestedRegionsAndSevenContinents() {
-        Board b=load();assertEquals(71,b.regions.size());assertEquals(7,b.continents.size());
+        Board b=load();assertEquals(72,b.regions.size());assertEquals(7,b.continents.size());
         for(String name:List.of("Prince Edward Island","Newfoundland and Labrador","Nunavut","Alaska","US-West","US-East","US-Midwest","US-South","Cuba","Hawaii","Yakutsk","Irkutsk","Colombia","Philippines","Victoria","New Zealand")) assertNotNull(b.region(name));
         assertEquals("Asia",b.region("Yakutsk").continent.name());assertEquals("Europe",b.region("Russia").continent.name());
         assertTrue(b.region("India").includes.contains("Pakistan"));assertTrue(b.region("Spain").includes.contains("Portugal"));assertTrue(b.region("Brazil").includes.contains("Guyana"));
@@ -45,9 +45,21 @@ class BoardTest {
         assertOwner(b,"France",4.5f,50.5f);
         assertOwner(b,"Ethiopia",35,-6);
         assertOwner(b,"Victoria",146.5f,-42);
-        assertOwner(b,"Egypt",18,20);
-        assertOwner(b,"Mali",16,12);
-        assertOwner(b,"Ethiopia",21,12);
+        // Chad is one territory with Cameroon, the Central African Republic and eastern Niger.
+        assertOwner(b,"Chad",18,20);
+        assertOwner(b,"Chad",16,12);
+        assertOwner(b,"Chad",21,12);
+        assertOwner(b,"Chad",12,5);
+        assertOwner(b,"Chad",20,6);
+        assertOwner(b,"Chad",12,17);
+        assertOwner(b,"Mali",7,15);
+        assertOwner(b,"Nigeria",8,9);
+        assertOwner(b,"Egypt",25,20);
+        assertEquals("Africa",b.region("Chad").continent.name());
+        Board.Region ethiopia=b.region("Ethiopia");
+        // Ethiopia is one landmass plus coastal islands; no detached inland piece remains.
+        assertTrue(ethiopia.polygons.stream().filter(p->p.length>20).count()==1);
+        assertTrue(b.links(b.region("Chad")).stream().noneMatch(e->e.other(b.region("Chad"))==ethiopia));
         assertOwner(b,"Algeria",-9,23);
         assertOwner(b,"Mali",-9,19);
     }
