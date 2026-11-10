@@ -2,10 +2,10 @@
 
 ## Builds
 
-- `:core:test :android:assembleDebug` succeeds with JDK 21, Android Gradle Plugin 8.7.3, SDK platform 35 and build tools 35.0.0. For the current APK it was run with a locally installed Gradle 8.14.3 (`gradle :core:test :android:assembleDebug`) because the wrapper's Gradle 8.9 download host was not reachable; the wrapper command in the README is unchanged and was last run with 8.9.
+- `./gradlew :core:test :android:assembleDebug` succeeds (wrapper Gradle 8.9) with JDK 21, Android Gradle Plugin 8.7.3, SDK platform 35 and build tools 35.0.0. This is how `GameofSupremacy_v0.2.1.apk` (version 0.2.1, versionCode 3) was built. If Maven Central answers with HTTP 429 during dependency resolution, simply re-run; Gradle keeps what it already downloaded.
 - `./mvnw verify` builds the shared game and desktop launcher with Java 17 bytecode.
-- Inspection of the current APK (`aapt2`/`apksigner`) confirms package `com.supremacy.game`, minimum Android API 26, target 35, sensor-landscape orientation, ARMv7/ARM64/x86-64 native libraries, the 72-territory `board.json`, the new player-setup code, a valid v2 signature, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.
-- The installable debug APK is included in `downloads/`, with a SHA-256 digest. SDKs, emulator images, caches, signing keys and environment-specific proxy configuration are excluded.
+- Inspection of `GameofSupremacy_v0.2.1.apk` (`aapt2`/`apksigner`) confirms version 0.2.1/versionCode 3, package `com.supremacy.game`, minimum Android API 26, target 35, sensor-landscape orientation, ARMv7/ARM64/x86-64 native libraries, the 72-territory `board.json`, a valid v2 signature, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.
+- The installable debug APK (`downloads/GameofSupremacy_v0.2.1.apk`) is included with its SHA-256 digest in `downloads/SHA256SUMS` (check with `sha256sum -c downloads/SHA256SUMS` from the repository root). SDKs, emulator images, caches, signing keys and environment-specific proxy configuration are excluded.
 
 ## Automated rules checks
 
