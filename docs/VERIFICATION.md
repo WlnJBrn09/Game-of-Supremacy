@@ -2,6 +2,10 @@
 
 ## Builds
 
+**v0.2.2:** `gradle :core:test :android:packageApk` (Gradle 8.14.3, JDK 21, AGP 8.7.3, SDK platform 35, build-tools 35.0.0) and `./mvnw verify` both succeed; all 30 tests pass. `aapt2 dump badging` on `GameofSupremacy_v0.2.2.apk` shows package `com.supremacy.game`, versionName 0.2.2 / versionCode 3, target SDK 35, the adaptive icon, ARMv7/ARM64/x86-64 libraries and no Internet permission; `apksigner` reports a valid v2 signature (debug key). The APK has still not been installed on a device or emulator, and the icon has not been seen on a launcher.
+
+Earlier build notes:
+
 - `:core:test :android:assembleDebug` succeeds with JDK 21, Android Gradle Plugin 8.7.3, SDK platform 35 and build tools 35.0.0. For the current APK it was run with a locally installed Gradle 8.14.3 (`gradle :core:test :android:assembleDebug`) because the wrapper's Gradle 8.9 download host was not reachable; the wrapper command in the README is unchanged and was last run with 8.9.
 - `./mvnw verify` builds the shared game and desktop launcher with Java 17 bytecode.
 - Inspection of the current APK (`aapt2`/`apksigner`) confirms package `com.supremacy.game`, minimum Android API 26, target 35, sensor-landscape orientation, ARMv7/ARM64/x86-64 native libraries, the 72-territory `board.json`, the new player-setup code, a valid v2 signature, and no Internet permission. AndroidX adds only its app-scoped signature permission for dynamic receivers.

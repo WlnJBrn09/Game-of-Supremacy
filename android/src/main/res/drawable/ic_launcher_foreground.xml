@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- gold ring -->
+    <path android:strokeColor="#E8B84A" android:strokeWidth="3" android:fillColor="#00000000"
+        android:pathData="M54,54m-30,0a30,30 0,1 1,60 0a30,30 0,1 1,-60 0"/>
+    <!-- five-point star -->
+    <path android:fillColor="#E8B84A"
+        android:pathData="M54,32 L58.9,46.9 L74.6,46.9 L61.9,56.1 L66.7,71 L54,61.8 L41.3,71 L46.1,56.1 L33.4,46.9 L49.1,46.9 Z"/>
+</vector>
