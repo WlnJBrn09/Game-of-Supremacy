@@ -12,7 +12,7 @@ See [the full rules and chosen defaults](docs/GAME_RULES.md), [territory groupin
 
 ## Install on Android
 
-Download [GameOfSupremacy-debug.apk](downloads/GameOfSupremacy-debug.apk) from this branch and open it on **Android 8.0 or newer**. Allow installation from the browser/file manager when Android asks. This is a debug-signed build for direct installation. It contains ARMv7, ARM64 and x86-64 native libraries, works offline, and requests no Internet permission. Landscape orientation is enforced. All map, font and audio assets are bundled.
+Download [GameofSupremacy_v0.2.1.apk](downloads/GameofSupremacy_v0.2.1.apk) from this branch and open it on **Android 8.0 or newer**. Allow installation from the browser/file manager when Android asks. This is a debug-signed build for direct installation. It contains ARMv7, ARM64 and x86-64 native libraries, works offline, and requests no Internet permission. Landscape orientation is enforced. All map, font and audio assets are bundled.
 
 ## Build the APK
 
@@ -31,7 +31,7 @@ A desktop launcher remains available for development and automated interaction c
 
 ```sh
 ./mvnw clean verify
-java -jar target/supremacy-game-0.2.0.jar
+java -jar target/supremacy-game-0.2.1.jar
 ```
 
 On macOS add `-XstartOnFirstThread` to the Java command. On Windows use `mvnw.cmd`. Desktop data defaults to `~/.supremacy`; `-Dsupremacy.saveDir=/path/to/test-data` isolates saves and preferences for tests. `-Dsupremacy.noAudio=true` disables desktop audio initialization on machines without an audio device.
