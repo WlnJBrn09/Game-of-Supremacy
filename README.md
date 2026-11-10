@@ -12,7 +12,7 @@ See [the full rules and chosen defaults](docs/GAME_RULES.md), [territory groupin
 
 ## Install on Android
 
-Download [GameofSupremscy_v0.2.1.apk](downloads/GameofSupremscy_v0.2.1.apk) from this branch and open it on **Android 8.0 or newer**. Allow installation from the browser/file manager when Android asks. This is a debug-signed build for direct installation. It contains ARMv7, ARM64 and x86-64 native libraries, works offline, and requests no Internet permission. Landscape orientation is enforced. All map, font and audio assets are bundled.
+Download [GameofSupremacy_v0.2.1.apk](downloads/GameofSupremacy_v0.2.1.apk) from this branch and open it on **Android 8.0 or newer**. Allow installation from the browser/file manager when Android asks. This is a debug-signed build for direct installation. It contains ARMv7, ARM64 and x86-64 native libraries, works offline, and requests no Internet permission. Landscape orientation is enforced. All map, font and audio assets are bundled.
 
 ## Build the APK
 
