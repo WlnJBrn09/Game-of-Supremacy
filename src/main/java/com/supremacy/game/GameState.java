@@ -94,6 +94,23 @@ public final class GameState {
   public ArrayList<Notice> history = new ArrayList<>();
   public int[] lastReadTurn = {-1, -1, -1, -1, -1};
 
+  // Match options. Saves written before options existed load with the original defaults.
+  public static final int DEFAULT_STARTING_ARMIES = 55;
+  public static final int[] STARTING_ARMY_OPTIONS = {35, 45, 55, 70};
+  public int startingArmies = DEFAULT_STARTING_ARMIES;
+  public boolean populationBonus = true;
+
+  /**
+   * Territory owners as each player last saw them (when their own turn or setup ended), so their
+   * next turn can show what changed while they were away. Rows are null until a player has played.
+   */
+  public int[][] lastSeenOwners = new int[5][];
+
+  /** Per-player match statistics, shown on the victory and defeat screens. */
+  public int[] captures = new int[5], eliminatedTurn = {-1, -1, -1, -1, -1},
+      eliminatedBy = {-1, -1, -1, -1, -1};
+  public long[] destroyed = new long[5], lost = new long[5];
+
   public GameState() {}
 
   /** Hex RGB string of a player's chosen colour. */

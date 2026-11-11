@@ -1,6 +1,18 @@
 # Playability and UI plan
 
-Status: proposal. Nothing in this plan has been implemented yet.
+Status: implemented in version 0.3.0, with the exceptions listed under "Status by milestone".
+The rest of this document is the original plan as written against 0.2.1.
+
+## Status by milestone
+
+| Milestone | Done | Not done or changed |
+| --- | --- | --- |
+| M0 feedback loop | Screenshot tour at four sizes plus pass-and-play, with layout checks; CI builds the APK, runs the tour, runs the APK on an Android emulator and publishes APKs on tags. | The committed APK in `downloads/` is kept (updated to 0.3.0) because it is how the game is installed today. |
+| M1 responsive layout | Layout in density-independent units from the real screen; fonts rasterised at device pixel size; phone layout (map + dock, commander chips) and wide layout (map + console); native Android text input for names. | **Not rebuilt on Scene2D.** The existing immediate-mode UI was made fully adaptive instead, which kept every screen working throughout. Buttons are 40 dp on phones (44–56 elsewhere), not 48, so that everything fits on 360 dp-tall screens; the tour enforces at least 28 dp. |
+| M2 readable map | Owner-coloured territories with a continent view in settings; continent spotlight from the bonus panel; badge collision avoidance with leader lines; badges sized in dp; auto-zoom to the fight on phones; fling, double-tap zoom, animated camera; territory details on long-press; GPU meshes for the map. | No colour-blind palette or patterns. Frame rate not yet measured on a device. |
+| M3 visible turns | Engine events; computer turns played on the map with camera follow, normal/fast speed and skip; recap of lost and gained land; rising loss and gain numbers; three new sounds and haptics; background, coalesced autosave; defeat and victory screens with statistics. | A blitz still resolves instantly for humans, with the total shown, rather than animating each roll. |
+| M4 forgiving flow | Undo for placements and moves; AUTO placement; tap places 1/3/5/ALL; threat markers; three-step first-game guide; starting-army and population-bonus options. | No drag-to-fortify gesture. |
+| M5 polish and release | Text size, sound, vibration, computer speed and map colour settings; results screens; release signing in CI when secrets are configured. | Title screen restyled only lightly. No colour-blind mode. Release signing needs a keystore added as repository secrets. |
 
 ## Summary
 
@@ -36,7 +48,7 @@ platform.
 
 ### 1. On a phone the UI is far too small
 
-![The current build rendered at 2400×1080](phone-current.png)
+![Version 0.2.1 rendered at 2400×1080](phone-current.png)
 
 `AtlasApp` uses `FitViewport(1600, 1000)` and every coordinate in `GameHud` (2,282 lines) is a
 hard-coded position on that canvas. On a 6.5-inch 20:9 phone (about 151 × 68 mm) that gives:

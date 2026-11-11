@@ -454,4 +454,147 @@ class GameEngineTest {
     GameEngine migrated = new GameEngine(b, legacy);
     for (int i = 0; i < 5; i++) assertEquals(i, migrated.state.players.get(i).color);
   }
+
+  @Test
+  void matchOptionsChangeStartingArmiesAndPopulationIncome() {
+    GameEngine g =
+        new GameEngine(
+            board(), 1, GameState.Difficulty.Easy, 5, null, null, new GameEngine.Options(35, false));
+    assertEquals(35 - g.count(0), g.state.reserve);
+    finishSetup(g);
+    for (int p = 0; p < 5; p++) assertEquals(35, g.total(p));
+    assertEquals(Math.max(3, g.count(0) / 3) + g.continentIncome(0), g.state.reserve);
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new GameEngine(
+                board(), 1, GameState.Difficulty.Easy, 5, null, null, new GameEngine.Options(5, true)));
+    g.validate();
+  }
+
+  @Test
+  void deploymentAndFortificationCanBeUndoneUntilDiceAreRolled() {
+    GameEngine g = game();
+    finishSetup(g);
+    long reserve = g.state.reserve;
+    int r = IntStreamHelper.first(g, 0);
+    long before = g.state.armies[r];
+    g.deploy(r, 2);
+    assertTrue(g.canUndo());
+    g.undo();
+    assertEquals(before, g.state.armies[r]);
+    assertEquals(reserve, g.state.reserve);
+    assertFalse(g.canUndo());
+    // The last placement can be taken back even after the phase moved on to attacking.
+    g.deploy(r, reserve);
+    g.finishDeployment();
+    assertEquals(ATTACK, g.state.phase);
+    g.undo();
+    assertEquals(REINFORCE, g.state.phase);
+    assertEquals(reserve, g.state.reserve);
+    g.deploy(r, reserve);
+    g.finishDeployment();
+    int target = -1;
+    for (int n : g.neighbours(r)) if (g.state.owners[n] != 0) target = n;
+    if (target >= 0) {
+      g.attack(r, target, (int) Math.min(3, g.state.armies[r] - 1));
+      assertFalse(g.canUndo(), "dice cannot be undone");
+    }
+    g.validate();
+
+    GameEngine f = game();
+    f.state.active = 0;
+    f.state.phase = FORTIFY;
+    assign(f, "US-West", 0, 12);
+    assign(f, "US-Midwest", 0, 1);
+    int a = f.index("US-West"), b = f.index("US-Midwest");
+    f.fortify(a, b, 5);
+    assertEquals(0, f.movable(b));
+    f.undo();
+    assertEquals(12, f.state.armies[a]);
+    assertEquals(1, f.state.armies[b]);
+    assertEquals(11, f.movable(a));
+  }
+
+  @Test
+  void deploymentPlansAndSuggestionsPlaceTheWholeReserveWithoutRandomness() {
+    GameEngine g = game();
+    long rng = g.state.rng;
+    long[] armies = g.state.armies.clone();
+    BotStrategy.Placement plan = new BotStrategy(g).suggestDeployment();
+    assertArrayEquals(armies, g.state.armies, "suggestions leave the board unchanged");
+    assertEquals(rng, g.state.rng, "suggestions use no randomness");
+    assertEquals(g.state.reserve, Arrays.stream(plan.amounts()).sum());
+    for (int r : plan.regions()) assertEquals(0, g.state.owners[r]);
+    g.deployPlan(plan.regions(), plan.amounts());
+    assertEquals(0, g.state.reserve);
+    g.undo();
+    assertArrayEquals(armies, g.state.armies, "a plan is undone as one step");
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> g.deployPlan(new int[] {plan.regions()[0]}, new long[] {g.state.reserve + 1}));
+  }
+
+  @Test
+  void eventsStatisticsAndRecapDescribeWhatHappened() {
+    GameEngine g = game();
+    List<GameEngine.Event> seen = new ArrayList<>();
+    g.onEvent(seen::add);
+    g.state.phase = ATTACK;
+    g.state.active = 0;
+    for (int i = 0; i < g.state.owners.length; i++) {
+      g.state.owners[i] = 0;
+      g.state.armies[i] = 1;
+    }
+    int a = g.index("US-West"), b = g.index("US-Midwest");
+    g.state.owners[b] = 1;
+    g.state.armies[b] = 3;
+    g.state.armies[a] = 60;
+    g.state.lastSeenOwners[1] = g.state.owners.clone();
+    while (g.state.phase == ATTACK) g.attack(a, b, 3);
+    assertTrue(seen.stream().anyMatch(e -> e.type() == GameEngine.EventType.ATTACK && e.to() == b));
+    assertTrue(seen.stream().anyMatch(e -> e.type() == GameEngine.EventType.CAPTURE && e.to() == b));
+    assertTrue(
+        seen.stream()
+            .anyMatch(e -> e.type() == GameEngine.EventType.ELIMINATED && e.player() == 1 && e.from() == 0));
+    assertEquals(1, g.state.captures[0]);
+    assertEquals(3, g.state.destroyed[0]);
+    assertEquals(3, g.state.lost[1]);
+    assertEquals(g.state.turn, g.state.eliminatedTurn[1]);
+    assertEquals(0, g.state.eliminatedBy[1]);
+    assertEquals(List.of(List.of(b), List.of()), g.changesSinceLastSeen(1));
+    g.validate();
+  }
+
+  @Test
+  void savesWrittenBeforeOptionsAndStatisticsStillLoad(@TempDir Path dir) throws Exception {
+    GameEngine g = game();
+    finishSetup(g);
+    String json = new com.badlogic.gdx.utils.Json().toJson(g.state);
+    com.badlogic.gdx.utils.JsonValue v = new com.badlogic.gdx.utils.JsonReader().parse(json);
+    for (String field :
+        List.of(
+            "startingArmies",
+            "populationBonus",
+            "lastSeenOwners",
+            "captures",
+            "eliminatedTurn",
+            "eliminatedBy",
+            "destroyed",
+            "lost")) v.remove(field);
+    Path file = dir.resolve("autosave.json");
+    Files.writeString(file, v.toJson(com.badlogic.gdx.utils.JsonWriter.OutputType.json));
+    GameEngine restored = new SaveStore(file).load(board());
+    assertEquals(55, restored.state.startingArmies);
+    assertTrue(restored.state.populationBonus);
+    assertEquals(g.state.reserve, restored.state.reserve);
+    restored.validate();
+  }
+
+  static final class IntStreamHelper {
+    static int first(GameEngine g, int player) {
+      for (int i = 0; i < g.state.owners.length; i++) if (g.state.owners[i] == player) return i;
+      throw new IllegalStateException();
+    }
+  }
 }

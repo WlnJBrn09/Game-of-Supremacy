@@ -72,7 +72,20 @@ class BoardTest {
         Vector2 before=c.world(600,530);c.zoomAt(1.25f,600,530);Vector2 after=c.world(600,530);
         assertEquals(before.x,after.x,.001);assertEquals(before.y,after.y,.001);
         assertEquals(600,c.screenX(after.x),.001);assertEquals(530,c.screenY(after.y),.001);
-        c.zoomAt(999,636,499);assertEquals(6,c.zoom);c.pan(99999,-99999);assertTrue(c.centerX>=0&&c.centerX<=1800);assertTrue(c.centerY>=0&&c.centerY<=750);
+        c.zoomAt(999,636,499);assertEquals(AtlasCamera.MAX_ZOOM,c.zoom);c.pan(99999,-99999);assertTrue(c.centerX>=0&&c.centerX<=1800);assertTrue(c.centerY>=0&&c.centerY<=750);
         c.zoomAt(.0001f,636,499);assertEquals(1,c.zoom);c.reset();assertEquals(900,c.centerX);assertEquals(375,c.centerY);
+    }
+    @Test void cameraFitsTheUncoveredPartOfTheMapAndAnimatesToTargets() {
+        AtlasCamera c=new AtlasCamera();c.setRect(0,0,800,360);c.setInsets(0,0,40,0);
+        // The whole world fits the safe area at zoom 1 and its centre sits in the safe area's centre.
+        assertEquals(Math.min(800/1800f,320/750f),c.scale(),1e-6);
+        assertEquals(400,c.screenX(900),1e-3);assertEquals(160,c.screenY(375),1e-3);
+        Board.Region alaska=load().region("Alaska");
+        c.flyTo(alaska.anchor.x,alaska.anchor.y,4);
+        for(int i=0;i<240&&c.update(1/60f);i++){}
+        assertFalse(c.moving());assertEquals(4,c.zoom,1e-3);
+        assertTrue(c.visible(c.screenX(alaska.anchor.x),c.screenY(alaska.anchor.y),0));
+        c.fling(5000,0);for(int i=0;i<600&&c.update(1/60f);i++){}
+        assertFalse(c.moving());assertTrue(c.centerX>=0&&c.centerX<=1800);
     }
 }

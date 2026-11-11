@@ -27,6 +27,39 @@ public final class GameEngine {
   public final GameState state;
   private final int[][] adjacent;
   private Runnable listener = () -> {};
+  private java.util.function.Consumer<Event> events = e -> {};
+
+  /** What just happened on the board, for animation and sound. Never saved. */
+  public enum EventType {
+    TURN,
+    DEPLOY,
+    ATTACK,
+    CAPTURE,
+    OCCUPY,
+    FORTIFY,
+    TRADE,
+    ELIMINATED,
+    VICTORY,
+    UNDO
+  }
+
+  /**
+   * One board event. {@code player} is the acting player (for ELIMINATED, the eliminated one and
+   * {@code from} the conqueror). Regions are -1 when not applicable.
+   */
+  public record Event(
+      EventType type, int player, int from, int to, long amount, long attackerLoss, long defenderLoss) {}
+
+  /** Optional match settings; the defaults reproduce the original rules. */
+  public record Options(int startingArmies, boolean populationBonus) {
+    public static final Options DEFAULT = new Options(GameState.DEFAULT_STARTING_ARMIES, true);
+  }
+
+  // Deployment and fortification can be taken back until dice, cards or the turn intervene.
+  private record Snapshot(
+      long[] armies, long[] moved, long reserve, GameState.Phase phase, boolean returnToAttack) {}
+
+  private final ArrayDeque<Snapshot> undo = new ArrayDeque<>();
 
   public GameEngine(Board board, int humans, GameState.Difficulty difficulty, long seed) {
     this(board, humans, difficulty, seed, null, null);
@@ -43,11 +76,27 @@ public final class GameEngine {
       long seed,
       List<String> humanNames,
       int[] humanColors) {
+    this(board, humans, difficulty, seed, humanNames, humanColors, Options.DEFAULT);
+  }
+
+  public GameEngine(
+      Board board,
+      int humans,
+      GameState.Difficulty difficulty,
+      long seed,
+      List<String> humanNames,
+      int[] humanColors,
+      Options options) {
     check(humans >= 1 && humans <= 5, "Choose one to five humans");
     this.board = board;
     state = new GameState();
     state.difficulty = difficulty;
     state.rng = seed == 0 ? 1 : seed;
+    check(
+        options.startingArmies() >= 20 && options.startingArmies() <= 200,
+        "Starting armies must be between 20 and 200");
+    state.startingArmies = options.startingArmies();
+    state.populationBonus = options.populationBonus();
     int n = board.regions.size();
     state.owners = new int[n];
     state.armies = new long[n];
@@ -79,8 +128,11 @@ public final class GameEngine {
     }
     for (int i = 0; i < n + 2; i++) state.deck.add(i);
     shuffle(state.deck);
-    state.reserve = 55 - count(0);
-    log("Random territories assigned. Each player starts with 55 armies.");
+    state.reserve = state.startingArmies - count(0);
+    log(
+        "Random territories assigned. Each player starts with "
+            + state.startingArmies
+            + " armies.");
   }
 
   /** Names are trimmed, single-spaced and limited to {@link GameState#MAX_NAME} characters. */
@@ -120,6 +172,13 @@ public final class GameEngine {
     // Saves from before colours were selectable carry no colour.
     if (state.players.stream().anyMatch(p -> p.color < 0))
       for (int i = 0; i < state.players.size(); i++) state.players.get(i).color = i;
+    // Saves from before recaps and statistics carry none.
+    if (state.lastSeenOwners == null) state.lastSeenOwners = new int[5][];
+    if (state.captures == null) state.captures = new int[5];
+    if (state.destroyed == null) state.destroyed = new long[5];
+    if (state.lost == null) state.lost = new long[5];
+    if (state.eliminatedTurn == null) state.eliminatedTurn = new int[] {-1, -1, -1, -1, -1};
+    if (state.eliminatedBy == null) state.eliminatedBy = new int[] {-1, -1, -1, -1, -1};
     adjacent = adjacency();
     validate();
   }
@@ -137,8 +196,74 @@ public final class GameEngine {
     this.listener = Objects.requireNonNull(listener);
   }
 
+  /** Receives board events as they happen (for animation). Replaces any previous listener. */
+  public void onEvent(java.util.function.Consumer<Event> listener) {
+    events = Objects.requireNonNull(listener);
+  }
+
   private void changed() {
     listener.run();
+  }
+
+  private void emit(EventType type, int from, int to, long amount, long attackerLoss, long defenderLoss) {
+    events.accept(new Event(type, state.active, from, to, amount, attackerLoss, defenderLoss));
+  }
+
+  private void remember() {
+    undo.push(
+        new Snapshot(
+            state.armies.clone(),
+            state.moved.clone(),
+            state.reserve,
+            state.phase,
+            state.returnToAttack));
+    while (undo.size() > 200) undo.removeLast();
+  }
+
+  private void forget() {
+    undo.clear();
+  }
+
+  /** True when the last deployment or fortification can be taken back. */
+  public boolean canUndo() {
+    return !undo.isEmpty() && state.phase != FINISHED;
+  }
+
+  /** Takes back the most recent deployment or fortification of the current turn. */
+  public void undo() {
+    check(canUndo(), "Nothing to undo");
+    Snapshot s = undo.pop();
+    long[] before = state.armies;
+    state.armies = s.armies();
+    state.moved = s.moved();
+    state.reserve = s.reserve();
+    state.phase = s.phase();
+    state.returnToAttack = s.returnToAttack();
+    for (int i = 0; i < before.length; i++)
+      if (before[i] != state.armies[i]) emit(EventType.UNDO, -1, i, state.armies[i] - before[i], 0, 0);
+    changed();
+  }
+
+  /** Records the board as this player saw it, for the recap at the start of their next turn. */
+  private void leave(int player) {
+    state.lastSeenOwners[player] = state.owners.clone();
+  }
+
+  /** Territories that changed hands since {@code player} last saw the board: [lost, gained]. */
+  public List<List<Integer>> changesSinceLastSeen(int player) {
+    List<Integer> lost = new ArrayList<>(), gained = new ArrayList<>();
+    int[] seen = state.lastSeenOwners[player];
+    if (seen != null && seen.length == state.owners.length)
+      for (int i = 0; i < seen.length; i++) {
+        if (seen[i] == player && state.owners[i] != player) lost.add(i);
+        if (seen[i] != player && state.owners[i] == player) gained.add(i);
+      }
+    return List.of(lost, gained);
+  }
+
+  /** Armies each player starts the match with (setup reserve plus one army per dealt territory). */
+  public int startingArmies() {
+    return state.startingArmies;
   }
 
   public int[] neighbours(int r) {
@@ -186,8 +311,12 @@ public final class GameEngine {
   }
 
   public long income(int player) {
-    return Math.addExact(
-        Math.max(3, count(player) / 3) + continentIncome(player), total(player) / 5);
+    return Math.addExact(Math.max(3, count(player) / 3) + continentIncome(player), populationIncome(player));
+  }
+
+  /** The 20% population rule: one army per five on the board, unless switched off for the match. */
+  public long populationIncome(int player) {
+    return state.populationBonus ? total(player) / 5 : 0;
   }
 
   public boolean adjacent(int a, int b) {
@@ -223,8 +352,33 @@ public final class GameEngine {
     own(r);
     check(amount > 0 && amount <= state.reserve, "Invalid reinforcement amount");
     long next = Math.addExact(state.armies[r], amount);
+    remember();
     state.armies[r] = next;
     state.reserve -= amount;
+    emit(EventType.DEPLOY, -1, r, amount, 0, 0);
+    changed();
+  }
+
+  /**
+   * Deploys several amounts at once as a single undoable step (used for automatic placement).
+   * Validates the whole plan before changing anything.
+   */
+  public void deployPlan(int[] regions, long[] amounts) {
+    check(state.phase == SETUP || state.phase == REINFORCE, "Not a deployment phase");
+    check(regions.length == amounts.length && regions.length > 0, "Empty deployment plan");
+    long sum = 0;
+    for (int i = 0; i < regions.length; i++) {
+      own(regions[i]);
+      check(amounts[i] > 0, "Invalid reinforcement amount");
+      sum = Math.addExact(sum, amounts[i]);
+    }
+    check(sum <= state.reserve, "Invalid reinforcement amount");
+    remember();
+    for (int i = 0; i < regions.length; i++) {
+      state.armies[regions[i]] = Math.addExact(state.armies[regions[i]], amounts[i]);
+      state.reserve -= amounts[i];
+      emit(EventType.DEPLOY, -1, regions[i], amounts[i], 0, 0);
+    }
     changed();
   }
 
@@ -233,9 +387,12 @@ public final class GameEngine {
         (state.phase == SETUP || state.phase == REINFORCE) && state.reserve == 0,
         "Place all remaining armies first");
     if (state.phase == SETUP) {
+      forget();
+      leave(state.active);
       if (state.active < 4) {
         state.active++;
-        state.reserve = 55 - count(state.active);
+        state.reserve = state.startingArmies - count(state.active);
+        emit(EventType.TURN, -1, -1, state.reserve, 0, 0);
       } else {
         state.active = 0;
         beginTurn();
@@ -253,12 +410,18 @@ public final class GameEngine {
   public void attack(int from, int to, int dice) {
     check(canAttack(from, to), "Choose adjacent enemy territory and leave one army behind");
     check(dice >= 1 && dice <= Math.min(3, state.armies[from] - 1), "Invalid attack dice");
+    forget();
     int defender = state.owners[to];
     state.attackDice = roll(dice);
     state.defendDice = roll((int) Math.min(2, state.armies[to]));
     int[] losses = losses(state.attackDice, state.defendDice);
     state.armies[from] -= losses[0];
     state.armies[to] -= losses[1];
+    state.destroyed[state.active] += losses[1];
+    state.lost[state.active] += losses[0];
+    state.destroyed[defender] += losses[0];
+    state.lost[defender] += losses[1];
+    emit(EventType.ATTACK, from, to, dice, losses[0], losses[1]);
     if (state.armies[to] == 0) {
       state.owners[to] = state.active;
       state.phase = OCCUPY;
@@ -266,6 +429,8 @@ public final class GameEngine {
       state.occupationTo = to;
       state.occupationMinimum = dice;
       state.conquered = true;
+      state.captures[state.active]++;
+      emit(EventType.CAPTURE, from, to, defender, 0, 0);
       String failed =
           state.players.get(state.active).name
               + " attacked "
@@ -285,6 +450,9 @@ public final class GameEngine {
         state.players.get(state.active).cards.addAll(state.players.get(defender).cards);
         state.players.get(defender).cards.clear();
         for (int p = 0; p < 5; p++) state.borders[defender][p] = state.borders[p][defender] = false;
+        state.eliminatedTurn[defender] = state.turn;
+        state.eliminatedBy[defender] = state.active;
+        events.accept(new Event(EventType.ELIMINATED, defender, state.active, to, 0, 0, 0));
         log(
             state.players.get(defender).name
                 + " was eliminated; their cards transfer to "
@@ -341,9 +509,12 @@ public final class GameEngine {
     state.armies[to] = amount;
     state.occupationFrom = state.occupationTo = -1;
     state.phase = ATTACK;
+    emit(EventType.OCCUPY, from, to, amount, 0, 0);
     if (count(state.active) == state.owners.length) {
       state.winner = state.active;
       state.phase = FINISHED;
+      for (int p = 0; p < 5; p++) if (state.players.get(p).human) leave(p);
+      emit(EventType.VICTORY, -1, -1, 0, 0, 0);
       log(state.players.get(state.active).name + " conquered the world!");
     } else if (state.players.get(state.active).cards.size() >= 6) {
       state.phase = REINFORCE;
@@ -355,6 +526,7 @@ public final class GameEngine {
 
   public void finishAttacks() {
     check(state.phase == ATTACK, "Finish deployment or occupation first");
+    forget();
     state.phase = FORTIFY;
     Arrays.fill(state.moved, 0);
     changed();
@@ -392,15 +564,19 @@ public final class GameEngine {
         from != to && amount > 0 && amount <= movable(from) && connected(from, to, state.active),
         "Use connected friendly territory; each army may move only once");
     long next = Math.addExact(state.armies[to], amount);
+    remember();
     state.armies[from] -= amount;
     state.armies[to] = next;
     state.moved[to] = Math.addExact(state.moved[to], amount);
+    emit(EventType.FORTIFY, from, to, amount, 0, 0);
     changed();
   }
 
   public void endTurn() {
     check(state.phase == FORTIFY, "Finish attacking first");
+    forget();
     if (state.conquered) drawCard();
+    leave(state.active);
     state.active = (state.active + 1) % 5;
     while (!alive(state.active)) state.active = (state.active + 1) % 5;
     beginTurn();
@@ -416,6 +592,7 @@ public final class GameEngine {
     state.attackDice = new int[0];
     state.defendDice = new int[0];
     state.reserve = income(state.active);
+    emit(EventType.TURN, -1, -1, state.reserve, 0, 0);
     log(
         state.players.get(state.active).name
             + " begins turn "
@@ -474,6 +651,7 @@ public final class GameEngine {
     check(validSet(cards) && hand.containsAll(cards), "Select a valid three-card set");
     long reward = nextSetValue();
     long reserve = Math.addExact(state.reserve, reward);
+    forget();
     int bonus = -1;
     for (int c : cards)
       if (c < state.owners.length && state.owners[c] == state.active) {
@@ -486,6 +664,7 @@ public final class GameEngine {
     state.tradeCount++;
     state.reserve = reserve;
     if (bonus >= 0) state.armies[bonus] += 2;
+    emit(EventType.TRADE, -1, bonus, reward, 0, 0);
     log(state.players.get(state.active).name + " traded a card set for " + reward + " armies.");
     changed();
   }
@@ -628,6 +807,7 @@ public final class GameEngine {
       return false;
     }
     Exchange exchange = prepareExchange(o);
+    forget();
     int[] owners = exchange.owners();
     long[] armies = exchange.armies();
     // Preserve movement history for unaffected armies; only arrivals become spent.
@@ -740,6 +920,7 @@ public final class GameEngine {
 
   public void revokeBorders(int other) {
     check(other >= 0 && other < 5 && other != state.active, "Invalid player");
+    forget();
     state.borders[state.active][other] = state.borders[other][state.active] = false;
     changed();
   }
@@ -826,6 +1007,19 @@ public final class GameEngine {
             && state.moved.length == state.owners.length,
         "Invalid territory data");
     check(state.reserve >= 0 && state.tradeCount >= 0, "Invalid economy");
+    check(state.startingArmies >= 20 && state.startingArmies <= 200, "Invalid starting armies");
+    check(
+        state.lastSeenOwners.length == 5
+            && Arrays.stream(state.lastSeenOwners)
+                .allMatch(o -> o == null || o.length == state.owners.length),
+        "Invalid recap data");
+    check(
+        state.captures.length == 5
+            && state.destroyed.length == 5
+            && state.lost.length == 5
+            && state.eliminatedTurn.length == 5
+            && state.eliminatedBy.length == 5,
+        "Invalid statistics");
     check(state.borders.length == 5 && state.lastReadTurn.length == 5, "Invalid diplomacy state");
     for (int p = 0; p < 5; p++) {
       check(state.borders[p].length == 5 && !state.borders[p][p], "Invalid borders");
