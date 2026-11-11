@@ -1,6 +1,7 @@
 package com.supremacy.android;
 
 import android.os.Bundle;
+import android.util.Log;
 import com.badlogic.gdx.backends.android.AndroidApplication;
 import com.badlogic.gdx.backends.android.AndroidApplicationConfiguration;
 import com.supremacy.board.AtlasApp;
@@ -20,5 +21,28 @@ public final class AndroidLauncher extends AndroidApplication {
     // Smooth edges on territory borders, army pieces and buttons.
     config.numSamples = 4;
     initialize(new AtlasApp(), config);
+  }
+
+  /**
+   * libGDX 1.13.1 crashes if the activity is destroyed before its keyboard-height helper has been
+   * attached to a view (for example when Android recreates the activity right after launch): {@code
+   * AndroidXKeyboardHeightProvider.close()} passes a null view to ViewCompat. By then {@code
+   * AndroidApplication.onDestroy()} has already called {@code Activity.onDestroy()}, and there is
+   * no listener to remove, so that one exception is safe to absorb. Anything else is rethrown.
+   */
+  @Override
+  protected void onDestroy() {
+    try {
+      super.onDestroy();
+    } catch (NullPointerException e) {
+      if (!fromKeyboardHeightProvider(e)) throw e;
+      Log.w("Supremacy", "Ignored libGDX keyboard-height cleanup on early destroy", e);
+    }
+  }
+
+  private static boolean fromKeyboardHeightProvider(Throwable e) {
+    for (StackTraceElement frame : e.getStackTrace())
+      if (frame.getClassName().contains(".keyboardheight.")) return true;
+    return false;
   }
 }

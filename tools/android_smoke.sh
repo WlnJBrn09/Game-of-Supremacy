@@ -24,6 +24,20 @@ adb shell am start -W -n "$activity"
 sleep 10; shot 01-title
 alive || fail "app is not running after launch"
 
+# Android can recreate the activity at any moment, even before its first frame (rotation, display
+# density and other configuration changes). Force that right after a cold start, twice, and check
+# the game survives. A density change always recreates the activity.
+for d in 360 480; do
+  adb shell am force-stop $pkg
+  adb shell am start -n "$activity" > /dev/null
+  sleep 0.4; adb shell wm density $d; sleep 5
+done
+adb shell wm density reset; sleep 8
+shot 01b-after-recreate
+adb logcat -d > "$out/logcat.txt"
+grep -q "FATAL EXCEPTION" "$out/logcat.txt" && fail "crash while the activity was being recreated"
+alive || fail "app is not running after being recreated"
+
 adb shell am force-stop $pkg
 adb shell am start -W -n "$activity" --es demo play
 sleep 10; shot 02-new-match
