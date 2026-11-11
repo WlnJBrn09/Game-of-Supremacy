@@ -9,7 +9,7 @@ import java.nio.file.*;
 /** Atomic autosave with a previous known-good backup; random state is part of the save. */
 public final class SaveStore {
   private final Path path;
-  private String warning = "";
+  private volatile String warning = "";
 
   public SaveStore(Path path) {
     this.path = path;
@@ -28,11 +28,28 @@ public final class SaveStore {
   }
 
   public void save(GameEngine game) {
+    write(game.board, snapshot(game));
+  }
+
+  /**
+   * Validates and serialises the match. Cheap; call on the thread that owns the engine. The result
+   * can be written later, on another thread, with {@link #write}.
+   */
+  public String snapshot(GameEngine game) {
     try {
       game.validate();
+      return new Json().toJson(game.state);
+    } catch (RuntimeException e) {
+      warning = "Autosave failed: " + e.getMessage();
+      throw new IllegalStateException(warning, e);
+    }
+  }
+
+  /** Writes a snapshot atomically, keeping the previous valid save as a backup. Thread-safe. */
+  public synchronized void write(Board board, String data) {
+    try {
       Path parent = path.toAbsolutePath().getParent();
       Files.createDirectories(parent);
-      String data = new Json().toJson(game.state);
       Path temp = path.resolveSibling(path.getFileName() + ".tmp");
       Files.write(
           temp,
@@ -41,14 +58,14 @@ public final class SaveStore {
           StandardOpenOption.TRUNCATE_EXISTING);
       // Verify the bytes before replacing a valid save or its backup.
       new GameEngine(
-          game.board,
+          board,
           new Json()
               .fromJson(
                   GameState.class, new String(Files.readAllBytes(temp), StandardCharsets.UTF_8)));
       if (Files.exists(path)) {
         try {
           new GameEngine(
-              game.board,
+              board,
               new Json()
                   .fromJson(
                       GameState.class,

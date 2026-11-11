@@ -22,7 +22,7 @@ Upstream notices packaged in dependency JARs remain in the bundled build. All na
 
 ## Game audio
 
-The short dice and conquest WAV effects are original procedurally synthesized sounds generated for this project. No external sound recordings are bundled.
+All WAV effects (dice, conquest, placement, victory and defeat) are original procedurally synthesized sounds generated for this project; `tools/generate_sounds.py` regenerates the last three. No external sound recordings are bundled.
 
 ## Android build
 

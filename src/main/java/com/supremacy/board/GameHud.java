@@ -7,21 +7,22 @@ import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.math.MathUtils;
-import com.badlogic.gdx.math.Rectangle;
 import com.supremacy.game.*;
 import java.util.*;
+import java.util.concurrent.*;
 
 /**
- * Pass-and-play interaction layer, laid out like a classic conquest board game: the world map on
- * top, a command console underneath with the commanders, the current phase and the next step.
- * Every action delegates to the shared rules engine.
+ * Pass-and-play interaction layer. On phones the map fills the screen beside a command dock; on
+ * tablets and desktops a console sits under the map. Every action delegates to the shared rules
+ * engine; computer turns are played back on the map at a chosen speed.
  */
 final class GameHud {
   enum Modal {
     NONE,
     MENU,
+    PLAYER,
     HANDOVER,
-    REPORT,
+    LOG,
     CARDS,
     DIPLOMACY,
     OFFER,
@@ -29,7 +30,9 @@ final class GameHud {
     PICK,
     SETTINGS,
     RULES,
-    PLAYER
+    ROSTER,
+    RESULT,
+    TUTORIAL
   }
 
   /** How a territory is emphasised on the map this frame. */
@@ -42,238 +45,139 @@ final class GameHud {
     TARGET
   }
 
-  enum Style {
-    NORMAL,
-    PRIMARY,
-    SELECTED,
-    DANGER,
-    DISABLED
+  /** A rising +/- number over a territory; repeated changes within a moment add up. */
+  static final class Floater {
+    final int region;
+    final Color color;
+    final String sign;
+    float born;
+    long amount;
+
+    Floater(int region, String sign, long amount, Color color, float born) {
+      this.region = region;
+      this.sign = sign;
+      this.amount = amount;
+      this.color = color;
+      this.born = born;
+    }
+
+    String text() {
+      return sign + amount;
+    }
   }
 
-  record Floater(int region, String text, Color color, float born) {}
-
-  static final Color CONSOLE = Color.valueOf("0A1621"),
-      RAISED = Color.valueOf("1D3748"),
-      RAISED_HI = Color.valueOf("29495E"),
-      LINE = Color.valueOf("2A4A5C"),
-      RED = Color.valueOf("E0625A"),
+  static final Color RED = Color.valueOf("E0625A"),
       GREEN = Color.valueOf("7DC383"),
-      PARCHMENT = Color.valueOf("EFE6CF"),
-      OFF = Color.valueOf("152837"),
-      GOLD_DARK = Color.valueOf("A88A4E");
-  private static final String[] CARD_TYPES = {"INFANTRY", "CAVALRY", "ARTILLERY", "WILD"};
-  private static final String[] SKILL_NOTES = {
+      ERROR_BG = Color.valueOf("3A1B1E"),
+      ERROR_TEXT = Color.valueOf("F2A39D");
+  static final int[] PLACE_STEPS = {1, 3, 5, 0};
+  static final String[] SKILL_NOTES = {
     "Learning the ropes", "Casual", "Balanced", "Plans ahead", "Ruthless", "Relentless"
   };
 
-  private final AtlasApp app;
+  final AtlasApp app;
+  final Draw d;
+  final Screens screens;
   final SaveStore saves;
   GameEngine game;
-  private BotStrategy bots;
-  private Modal modal = Modal.MENU, returnModal = Modal.NONE;
-  private int humans = 1,
-      difficulty = 2,
-      from = -1,
-      to = -1,
-      page,
-      recipient = 1,
-      counterId = -1,
-      pickPage;
-  private long amount = 1;
-  private int dice = 3, lastActive = -1;
-  private float animation, clock, toastAt = -99;
-  private String toast = "", pickTitle = "", rollSummary = "";
-  private boolean toastError, legendOpen = true, confirmNew;
-  private int[] shownAttack = new int[0], shownDefend = new int[0];
-  private long[] income;
-  private List<String> report = List.of();
-  private List<Integer> picks = List.of();
-  private java.util.function.IntConsumer pickAction;
-  private final List<Integer> cards = new ArrayList<>();
+  BotStrategy bots;
+  Modal modal = Modal.MENU;
+
+  // Turn interaction.
+  int from = -1, to = -1, dice = 3, lastActive = -1, placeStep = 0;
+  long amount = 1;
+  float animation, clock, toastAt = -99;
+  String toast = "", rollSummary = "";
+  boolean toastError;
+  int[] shownAttack = new int[0], shownDefend = new int[0];
+  long[] income;
+  final List<Integer> cards = new ArrayList<>();
   private final List<Floater> floaters = new ArrayList<>();
-  private GameState.Offer draft, viewOffer;
-  private boolean armyPage, soundEnabled, logMode;
-  // Title-screen seat setup: the first `humans` seats are human players.
-  private final String[] seatName = {"Player 1", "Player 2", "Player 3", "Player 4", "Player 5"};
-  private final int[] seatColor = {0, 1, 2, 3, 4};
-  private final boolean[] named = new boolean[5];
-  private int editing = -1;
-  private String editText = "";
-  private boolean editFlow, editFresh, shift;
-  private Modal rulesReturn = Modal.MENU;
-  private Sound diceSound, winSound;
+
+  // Recap of what changed since the active human's last turn, and the territory being inspected.
+  Set<Integer> recapLost = Set.of(), recapGained = Set.of();
+  boolean recapOpen;
+  int recapEvents, inspect = -1;
+  Board.Continent spotlight;
+  boolean legendOpen;
+
+  // Dragging armies between territories (fortify phase).
+  int dragFrom = -1, dragOver = -1;
+  float dragX, dragY;
+  boolean dragValid;
+
+  // Computer-turn playback.
+  private float botTimer, nextDelay;
+  boolean skipping, resultShown, watching;
+  int arrowA = -1, arrowB = -1;
+  private Color arrowTint = RED;
+  private float arrowAt = -99, diceSoundAt = -99;
+  String botAction = "";
+
+  // Background autosave.
+  private final ExecutorService saver =
+      Executors.newSingleThreadExecutor(
+          r -> {
+            Thread t = new Thread(r, "autosave");
+            t.setDaemon(true);
+            return t;
+          });
+  private Future<?> pendingSave;
+  private boolean dirty, acted;
+  private float lastSaveAt;
+  private int savedActive = -1;
+  private GameState.Phase savedPhase;
+  private volatile String saveError;
+
+  // Options.
+  boolean soundEnabled, hapticsEnabled, fastBots, continentView, tutorialSeen;
+  private Sound diceSound, winSound, placeSound, victorySound, defeatSound;
+
+  // Layout, recomputed every frame from the screen size.
+  boolean compact;
+  float dockW, topH, consoleH, mapX, mapY, mapW, mapH;
 
   GameHud(AtlasApp app) {
     this.app = app;
+    d = new Draw(app, this::action);
     String dir =
         System.getProperty("supremacy.saveDir", Gdx.files.getLocalStoragePath() + "supremacy");
     saves = new SaveStore(java.nio.file.Paths.get(dir, "autosave.json"));
-    soundEnabled = Gdx.app.getPreferences("supremacy-options").getBoolean("sound", true);
-    loadSetup();
+    Preferences prefs = prefs();
+    soundEnabled = prefs.getBoolean("sound", true);
+    hapticsEnabled = prefs.getBoolean("haptics", true);
+    fastBots = prefs.getBoolean("fastBots", false);
+    continentView = prefs.getBoolean("continentView", false);
+    tutorialSeen = prefs.getBoolean("tutorialSeen", false);
+    screens = new Screens(this);
+    screens.loadSetup();
+    diceSound = sound("audio/dice.wav");
+    winSound = sound("audio/conquest.wav");
+    placeSound = sound("audio/place.wav");
+    victorySound = sound("audio/victory.wav");
+    defeatSound = sound("audio/defeat.wav");
+    if (System.getProperty("supremacy.demo") != null) screens.startDemo();
+  }
+
+  static Preferences prefs() {
+    return Gdx.app.getPreferences("supremacy-options");
+  }
+
+  private static Sound sound(String path) {
     try {
-      diceSound = Gdx.audio.newSound(Gdx.files.internal("audio/dice.wav"));
-      winSound = Gdx.audio.newSound(Gdx.files.internal("audio/conquest.wav"));
+      return Gdx.files.internal(path).exists() ? Gdx.audio.newSound(Gdx.files.internal(path)) : null;
     } catch (RuntimeException e) {
-      diceSound = winSound = null;
+      return null;
     }
   }
 
-  // ---------------------------------------------------------------- player setup
-
-  private void loadSetup() {
-    try {
-      Preferences prefs = Gdx.app.getPreferences("supremacy-options");
-      humans = Math.max(1, Math.min(5, prefs.getInteger("humans", 1)));
-      difficulty = Math.max(0, Math.min(5, prefs.getInteger("difficulty", 2)));
-      int[] colors = new int[5];
-      Set<Integer> used = new HashSet<>();
-      for (int i = 0; i < 5; i++) {
-        colors[i] = prefs.getInteger("color" + i, i);
-        if (colors[i] < 0 || colors[i] >= GameState.COLORS.length || !used.add(colors[i])) return;
-      }
-      System.arraycopy(colors, 0, seatColor, 0, 5);
-      for (int i = 0; i < 5; i++) {
-        String saved = prefs.getString("name" + i, "");
-        if (saved.isEmpty()) continue;
-        seatName[i] = GameEngine.cleanName(saved);
-        named[i] = true;
-      }
-    } catch (RuntimeException e) {
-      // Unreadable preferences just mean default names and colours.
-    }
+  void play(Sound s, float volume) {
+    if (soundEnabled && s != null) s.play(volume);
   }
 
-  private void saveSetup() {
-    try {
-      Preferences prefs = Gdx.app.getPreferences("supremacy-options");
-      prefs.putInteger("humans", humans).putInteger("difficulty", difficulty);
-      for (int i = 0; i < 5; i++) {
-        prefs.putString("name" + i, named[i] ? seatName[i] : "");
-        prefs.putInteger("color" + i, seatColor[i]);
-      }
-      prefs.flush();
-    } catch (RuntimeException e) {
-      // Remembering setup is a convenience; never block the game on it.
-    }
-  }
-
-  private int[] previewColors() {
-    return GameEngine.assignColors(humans, seatColor);
-  }
-
-  private Color menuColor(int seat) {
-    return Color.valueOf(GameState.COLORS[previewColors()[seat]]);
-  }
-
-  private int nextUnnamed() {
-    for (int i = 0; i < humans; i++) if (!named[i]) return i;
-    return -1;
-  }
-
-  /** Validates a name for a human seat against the other humans and the computer players in use. */
-  private String validatedName(int seat, String raw) {
-    String name = GameEngine.cleanName(raw);
-    for (int i = 0; i < humans; i++)
-      if (i != seat && named[i] && seatName[i].equalsIgnoreCase(name))
-        throw new IllegalStateException("Another player is already called " + name + ".");
-    for (int k = 0; k < 5 - humans; k++)
-      if (GameState.BOT_NAMES[k].equalsIgnoreCase(name))
-        throw new IllegalStateException(name + " is a computer player's name. Pick another.");
-    return name;
-  }
-
-  private void openEditor(int seat, boolean flow) {
-    editing = seat;
-    editFlow = flow;
-    editText = named[seat] ? seatName[seat] : "";
-    editFresh = false;
-    shift = false;
-    modal = Modal.PLAYER;
-  }
-
-  private void pickColor(int seat, int color) {
-    for (int j = 0; j < 5; j++)
-      if (j != seat && seatColor[j] == color) {
-        seatColor[j] = seatColor[seat]; // taking another seat's colour swaps the two
-        break;
-      }
-    seatColor[seat] = color;
-    saveSetup();
-  }
-
-  private void insert(char c) {
-    if (editFresh) editText = "";
-    editFresh = false;
-    if (editText.length() >= GameState.MAX_NAME) return;
-    editText += c;
-  }
-
-  /** On-screen key: letters capitalise at the start of each word or after SHIFT. */
-  private void press(char c) {
-    if (Character.isLetter(c)) {
-      boolean upper = shift || editText.isEmpty() || editText.endsWith(" ") || editFresh;
-      c = upper ? Character.toUpperCase(c) : Character.toLowerCase(c);
-      shift = false;
-    }
-    insert(c);
-  }
-
-  private void backspace() {
-    if (editFresh) editText = "";
-    editFresh = false;
-    if (!editText.isEmpty()) editText = editText.substring(0, editText.length() - 1);
-  }
-
-  /** Physical keyboard text, keeping the case the player typed. */
-  boolean typed(char c) {
-    if (modal != Modal.PLAYER) return false;
-    if (Character.isLetterOrDigit(c) || c == ' ' || c == '-' || c == '\'' || c == '.') {
-      insert(c);
-      Gdx.graphics.requestRendering();
-    }
-    return true;
-  }
-
-  /** Backspace and Enter on a physical keyboard while the name editor is open. */
-  boolean editKey(int key) {
-    if (modal != Modal.PLAYER) return false;
-    if (key == Input.Keys.BACKSPACE) backspace();
-    else if (key == Input.Keys.ENTER || key == Input.Keys.NUMPAD_ENTER) action(this::finishEdit);
-    Gdx.graphics.requestRendering();
-    return true;
-  }
-
-  private void finishEdit() {
-    String name = validatedName(editing, editText);
-    seatName[editing] = name;
-    named[editing] = true;
-    saveSetup();
-    if (editFlow) {
-      int next = nextUnnamed();
-      if (next >= 0) {
-        openEditor(next, true);
-        return;
-      }
-      modal = Modal.MENU;
-      startPressed();
-    } else modal = Modal.MENU;
-  }
-
-  private void startPressed() {
-    int unnamed = nextUnnamed();
-    if (unnamed >= 0) {
-      openEditor(unnamed, true);
-      say("Enter a name for " + seatName[unnamed] + " to begin.", false);
-      return;
-    }
-    for (int i = 0; i < humans; i++) seatName[i] = validatedName(i, seatName[i]);
-    if ((game != null || saves.exists()) && !confirmNew) {
-      confirmNew = true;
-      say("Starting a new game replaces your saved game.", false);
-      return;
-    }
-    confirmNew = false;
-    newMatch();
+  void haptic(int ms) {
+    if (hapticsEnabled && Gdx.app.getType() == Application.ApplicationType.Android)
+      Gdx.input.vibrate(ms);
   }
 
   void attach(GameEngine engine) {
@@ -281,24 +185,37 @@ final class GameHud {
     bots = new BotStrategy(game);
     game.onChange(
         () -> {
-          saves.save(game);
+          dirty = true;
           Gdx.graphics.requestRendering();
         });
-    saves.save(game);
+    game.onEvent(this::onEvent);
+    saveNow();
     from = to = -1;
     cards.clear();
     floaters.clear();
     lastActive = -1;
+    resultShown = game.state.phase == FINISHED;
+    watching = skipping = false;
+    recapLost = recapGained = Set.of();
+    recapOpen = false;
+    inspect = -1;
+    spotlight = null;
     modal = Modal.NONE;
+    legendOpen = !compactNow() && prefs().getBoolean("legendOpen", true);
     app.camera.reset();
     checkTurn();
   }
 
+  private boolean compactNow() {
+    return app.H < 560 || app.W > app.H * 1.95f;
+  }
+
   // ---------------------------------------------------------------- state helpers
 
-  private void action(Runnable command) {
+  void action(Runnable command) {
     try {
       command.run();
+      acted = true;
       checkTurn();
     } catch (IllegalArgumentException | IllegalStateException | ArithmeticException e) {
       say(e.getMessage(), true);
@@ -306,31 +223,47 @@ final class GameHud {
     Gdx.graphics.requestRendering();
   }
 
-  private void say(String message, boolean error) {
+  void say(String message, boolean error) {
     toast = message == null ? "" : message;
     toastError = error;
     toastAt = clock;
+    if (error) haptic(25);
   }
 
-  private static void refuse(String reason) {
+  static void refuse(String reason) {
     throw new IllegalStateException(reason);
   }
 
-  private boolean hotseat() {
+  boolean hotseat() {
     int n = 0;
     for (GameState.Player p : game.state.players) if (p.human) n++;
     return n > 1;
   }
 
-  private void checkTurn() {
+  boolean anyHumanAlive() {
+    for (int p = 0; p < 5; p++) if (game.state.players.get(p).human && game.alive(p)) return true;
+    return false;
+  }
+
+  void checkTurn() {
     if (game == null) return;
     GameState s = game.state;
+    if (!resultShown && (s.phase == FINISHED || !anyHumanAlive())) {
+      resultShown = true;
+      from = to = -1;
+      recapOpen = false;
+      if (modal == Modal.NONE || modal == Modal.HANDOVER) modal = Modal.RESULT;
+      toast = "";
+      boolean humanWon = s.phase == FINISHED && s.players.get(s.winner).human;
+      play(humanWon ? victorySound : defeatSound, .6f);
+      haptic(humanWon ? 60 : 120);
+    }
     if (s.active != lastActive) {
       lastActive = s.active;
       from = to = -1;
       amount = 1;
       cards.clear();
-      page = 0;
+      inspect = -1;
       shownAttack = shownDefend = new int[0];
       rollSummary = "";
       income = null;
@@ -338,24 +271,51 @@ final class GameHud {
         long lands = Math.max(3, game.count(s.active) / 3), continents = game.continentIncome(s.active);
         income = new long[] {lands, continents, s.reserve - lands - continents};
       }
-      if (s.players.get(lastActive).human) {
-        report = game.report(s.active);
-        if (hotseat()) modal = Modal.HANDOVER;
-        else showReport();
-      } else modal = Modal.NONE;
+      if (s.players.get(s.active).human && s.phase != FINISHED) {
+        skipping = false;
+        if (hotseat()) {
+          modal = Modal.HANDOVER;
+          toast = ""; // the previous player's messages are not for the next one
+        } else startHumanTurn();
+      }
     }
   }
 
-  /** Shows what happened since this player's last turn, once, then marks it read. */
-  private void showReport() {
-    logMode = false;
-    page = 0;
-    report = game.report(game.state.active);
-    modal = game.state.phase == SETUP || visibleReport().isEmpty() ? Modal.NONE : Modal.REPORT;
-    if (game.state.lastReadTurn[game.state.active] < game.state.turn) game.markRead();
+  /** Called when a human takes the device: recap what changed and frame the losses. */
+  void startHumanTurn() {
+    modal = Modal.NONE;
+    GameState s = game.state;
+    List<List<Integer>> changes = game.changesSinceLastSeen(s.active);
+    recapLost = new LinkedHashSet<>(changes.get(0));
+    recapGained = new LinkedHashSet<>(changes.get(1));
+    recapEvents = screens.reportLines().size();
+    recapOpen = s.phase != SETUP && (!recapLost.isEmpty() || !recapGained.isEmpty() || recapEvents > 0);
+    if (s.lastReadTurn[s.active] < s.turn) game.markRead();
+    if (!recapLost.isEmpty()) frame(recapLost);
+    else app.camera.animateReset();
+    if (!tutorialSeen && (s.phase == SETUP || s.phase == REINFORCE)) modal = Modal.TUTORIAL;
   }
 
-  private boolean humanTurn() {
+  /** Hides the recap card and its red/green outlines once the player has seen them or moved. */
+  void dismissRecap() {
+    recapOpen = false;
+    recapLost = recapGained = Set.of();
+  }
+
+  void frame(Collection<Integer> regions) {
+    float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE, maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+    for (int r : regions) {
+      var a = app.board.regions.get(r).anchor;
+      minX = Math.min(minX, a.x);
+      maxX = Math.max(maxX, a.x);
+      minY = Math.min(minY, a.y);
+      maxY = Math.max(maxY, a.y);
+    }
+    if (maxX - minX > 900) app.camera.animateReset(); // spans the Pacific wrap: show everything
+    else app.camera.frame(minX, minY, maxX, maxY);
+  }
+
+  boolean humanTurn() {
     return game != null
         && game.state.players.get(game.state.active).human
         && game.state.phase != FINISHED;
@@ -377,34 +337,61 @@ final class GameHud {
     return floaters;
   }
 
+  boolean continentMode() {
+    return continentView;
+  }
+
+  Board.Continent highlightContinent() {
+    return spotlight;
+  }
+
+  Color recapColor(int r) {
+    if (!humanTurn() || game.state.active != lastActive) return null;
+    if (recapLost.contains(r)) return RED;
+    if (recapGained.contains(r)) return GREEN;
+    return null;
+  }
+
   boolean animating() {
     return animation > 0
         || modal == Modal.PLAYER
         || !floaters.isEmpty()
         || clock - toastAt < 3.6f
-        || (interactive() && (from >= 0 || game.state.phase == OCCUPY));
+        || clock - arrowAt < 1.2f
+        || pendingSave != null && !pendingSave.isDone()
+        || (game != null && !humanTurn() && modal == Modal.NONE && game.state.phase != FINISHED)
+        || (interactive()
+            && (from >= 0 || game.state.phase == OCCUPY || !recapLost.isEmpty() || !recapGained.isEmpty()));
   }
 
   /** The region whose sea lanes the map highlights. */
   int focus() {
     if (game == null) return -1;
-    if (game.state.phase == OCCUPY) return game.state.occupationTo;
+    if (game.state.phase == OCCUPY && humanTurn()) return game.state.occupationTo;
+    if (inspect >= 0) return inspect;
     return humanTurn() ? from : -1;
   }
 
   int arrowFrom() {
-    if (game == null || !humanTurn()) return -1;
-    return game.state.phase == OCCUPY ? game.state.occupationFrom : to >= 0 ? from : -1;
+    if (game == null) return -1;
+    if (humanTurn())
+      return game.state.phase == OCCUPY ? game.state.occupationFrom : to >= 0 ? from : -1;
+    return clock - arrowAt < 1.2f ? arrowA : -1;
   }
 
   int arrowTo() {
-    if (game == null || !humanTurn()) return -1;
-    return game.state.phase == OCCUPY ? game.state.occupationTo : to;
+    if (game == null) return -1;
+    if (humanTurn()) return game.state.phase == OCCUPY ? game.state.occupationTo : to;
+    return clock - arrowAt < 1.2f ? arrowB : -1;
+  }
+
+  Color arrowColor() {
+    return humanTurn() ? actionColor() : arrowTint;
   }
 
   /** Deployment only fades enemy land a little; targeting fades everything irrelevant. */
   float dimStrength() {
-    return game != null && (game.state.phase == SETUP || game.state.phase == REINFORCE) ? .32f : .5f;
+    return game != null && (game.state.phase == SETUP || game.state.phase == REINFORCE) ? .3f : .5f;
   }
 
   Color actionColor() {
@@ -413,11 +400,28 @@ final class GameHud {
         : AtlasApp.GOLD;
   }
 
-  private boolean canAttackFrom(int r) {
+  boolean canAttackFrom(int r) {
     GameState s = game.state;
     if (s.owners[r] != s.active || s.armies[r] < 2) return false;
     for (int n : game.neighbours(r)) if (s.owners[n] != s.active) return true;
     return false;
+  }
+
+  /** An enemy neighbour clearly outnumbers this territory of the player whose turn it is. */
+  boolean threatened(int r) {
+    if (!humanTurn() || modal != Modal.NONE) return false;
+    GameState s = game.state;
+    if (s.owners[r] != s.active || s.phase == OCCUPY || (s.phase == ATTACK && from >= 0)) return false;
+    if (s.phase == FORTIFY && from >= 0) return false;
+    long strongest = 0;
+    for (int n : game.neighbours(r)) if (s.owners[n] != s.active) strongest = Math.max(strongest, s.armies[n]);
+    return strongest >= s.armies[r] + 3;
+  }
+
+  int threatCount() {
+    int n = 0;
+    for (int r = 0; r < game.state.owners.length; r++) if (threatened(r)) n++;
+    return n;
   }
 
   Role role(int r) {
@@ -428,7 +432,7 @@ final class GameHud {
       case SETUP, REINFORCE -> {
         if (r == from) return Role.SOURCE;
         if (!own) return Role.DIM;
-        return s.reserve > 0 && from < 0 ? Role.HINT : Role.NORMAL;
+        return s.reserve > 0 ? Role.HINT : Role.NORMAL;
       }
       case ATTACK -> {
         if (from < 0) return canAttackFrom(r) ? Role.HINT : Role.NORMAL;
@@ -441,6 +445,7 @@ final class GameHud {
         return r == s.occupationTo ? Role.TARGET : Role.DIM;
       }
       case FORTIFY -> {
+        if (dragFrom >= 0 && dragValid && r == dragOver) return Role.TARGET;
         if (from < 0) return own && game.movable(r) > 0 ? Role.HINT : Role.NORMAL;
         if (r == from) return Role.SOURCE;
         if (r == to) return Role.TARGET;
@@ -452,41 +457,334 @@ final class GameHud {
     }
   }
 
+  // ---------------------------------------------------------------- events and playback
+
+  private void pop(int region, String sign, long n, Color color) {
+    if (region < 0 || n == 0 || skipping) return;
+    for (Floater f : floaters)
+      if (f.region == region && f.sign.equals(sign) && f.color.equals(color) && clock - f.born < .45f) {
+        f.amount += n;
+        f.born = clock;
+        return;
+      }
+    floaters.add(new Floater(region, sign, n, color, clock));
+  }
+
+  private void onEvent(GameEngine.Event e) {
+    GameState s = game.state;
+    boolean human = s.players.get(s.active).human;
+    float delay = .1f;
+    switch (e.type()) {
+      case DEPLOY -> {
+        pop(e.to(), "+", e.amount(), AtlasApp.GOLD);
+        if (human) play(placeSound, .5f);
+        else botAction = s.players.get(s.active).name + " reinforces " + game.name(e.to()) + ".";
+        delay = .22f;
+        follow(e.to());
+      }
+      case ATTACK -> {
+        pop(e.from(), "-", e.attackerLoss(), RED);
+        pop(e.to(), "-", e.defenderLoss(), RED);
+        boolean newFront = e.from() != arrowA || e.to() != arrowB || clock - arrowAt > 1.5f;
+        arrowA = e.from();
+        arrowB = e.to();
+        arrowAt = clock;
+        arrowTint = Color.valueOf(s.color(s.active));
+        if (clock - diceSoundAt > .14f && !skipping) {
+          play(diceSound, human ? .45f : .25f);
+          diceSoundAt = clock;
+        }
+        if (!human)
+          botAction =
+              s.players.get(s.active).name
+                  + " attacks "
+                  + game.name(e.to())
+                  + " ("
+                  + s.players.get(s.owners[e.to()]).name
+                  + ") from "
+                  + game.name(e.from())
+                  + ".";
+        delay = newFront ? .5f : .13f;
+        follow(e.to());
+      }
+      case CAPTURE -> {
+        play(winSound, human ? .5f : .3f);
+        int victim = (int) e.amount();
+        if (victim >= 0 && s.players.get(victim).human) haptic(40);
+        if (human) haptic(30);
+        if (!human)
+          botAction =
+              s.players.get(s.active).name
+                  + " captures "
+                  + game.name(e.to())
+                  + " from "
+                  + s.players.get(victim).name
+                  + ".";
+        delay = .45f;
+      }
+      case OCCUPY -> {
+        pop(e.to(), "+", e.amount(), AtlasApp.GOLD);
+        delay = .3f;
+      }
+      case FORTIFY -> {
+        pop(e.from(), "-", e.amount(), AtlasApp.MUTED);
+        pop(e.to(), "+", e.amount(), AtlasApp.GOLD);
+        if (!human)
+          botAction =
+              s.players.get(s.active).name
+                  + " moves "
+                  + e.amount()
+                  + " from "
+                  + game.name(e.from())
+                  + " to "
+                  + game.name(e.to())
+                  + ".";
+        arrowA = e.from();
+        arrowB = e.to();
+        arrowAt = clock;
+        arrowTint = AtlasApp.GOLD;
+        delay = .45f;
+        follow(e.to());
+      }
+      case TRADE -> {
+        if (e.to() >= 0) pop(e.to(), "+", 2, AtlasApp.GOLD);
+        if (!human) botAction = s.players.get(s.active).name + " trades cards for " + e.amount() + " armies.";
+        delay = .6f;
+      }
+      case ELIMINATED -> {
+        String loser = s.players.get(e.player()).name, winner = s.players.get(e.from()).name;
+        say(loser + " was eliminated by " + winner + ".", false);
+        delay = 1.2f;
+      }
+      case UNDO -> pop(e.to(), e.amount() > 0 ? "+" : "-", Math.abs(e.amount()), AtlasApp.MUTED);
+      case TURN -> delay = .5f;
+      default -> {}
+    }
+    nextDelay = Math.max(nextDelay, delay);
+  }
+
+  /** Keeps computer moves on screen without fighting a player who is looking elsewhere. */
+  private void follow(int region) {
+    if (humanTurn() || skipping) return;
+    var a = app.board.regions.get(region).anchor;
+    app.camera.reveal(a.x, a.y, 40);
+  }
+
+  private void playBots(float dt) {
+    GameState s = game.state;
+    if (s.phase == FINISHED || modal != Modal.NONE || s.players.get(s.active).human) return;
+    if (skipping) {
+      long start = System.nanoTime();
+      while (!humanTurn() && s.phase != FINISHED && modal == Modal.NONE
+          && System.nanoTime() - start < 18_000_000L) stepBot();
+      floaters.clear();
+      arrowA = arrowB = -1;
+      return;
+    }
+    botTimer -= dt;
+    if (botTimer <= 0) stepBot();
+  }
+
+  private void stepBot() {
+    nextDelay = .06f;
+    try {
+      bots.step();
+    } catch (RuntimeException e) {
+      say("Computer player paused: " + e.getMessage(), true);
+      modal = Modal.SETTINGS;
+    }
+    botTimer = nextDelay * (fastBots ? .3f : 1f);
+    checkTurn();
+  }
+
+  // ---------------------------------------------------------------- saving
+
+  /** Saves at meaningful moments rather than after every dice roll, off the render thread. */
+  private void maybeSave() {
+    if (!dirty || game == null) return;
+    GameState s = game.state;
+    boolean boundary = s.active != savedActive || s.phase != savedPhase || s.phase == OCCUPY;
+    if (!(acted || boundary || clock - lastSaveAt > 4)) return;
+    if (pendingSave != null && !pendingSave.isDone() && !boundary) return;
+    saveAsync();
+  }
+
+  private void saveAsync() {
+    try {
+      String data = saves.snapshot(game);
+      Board board = app.board;
+      pendingSave =
+          saver.submit(
+              () -> {
+                try {
+                  saves.write(board, data);
+                } catch (RuntimeException e) {
+                  saveError = e.getMessage();
+                }
+              });
+      markSaved();
+    } catch (RuntimeException e) {
+      say(e.getMessage(), true);
+      dirty = false;
+    }
+  }
+
+  private void markSaved() {
+    dirty = acted = false;
+    lastSaveAt = clock;
+    savedActive = game.state.active;
+    savedPhase = game.state.phase;
+  }
+
+  /** Saves and waits for the disk, e.g. when the app goes to the background. */
+  void saveNow() {
+    if (game == null) return;
+    try {
+      String data = saves.snapshot(game);
+      Board board = app.board;
+      saver.submit(() -> saves.write(board, data)).get(5, TimeUnit.SECONDS);
+      markSaved();
+    } catch (ExecutionException e) {
+      say(e.getCause().getMessage(), true);
+    } catch (InterruptedException | TimeoutException | RuntimeException e) {
+      say("Autosave failed: " + e.getMessage(), true);
+    }
+  }
+
+  void waitForSaves() {
+    try {
+      if (pendingSave != null) pendingSave.get(5, TimeUnit.SECONDS);
+    } catch (InterruptedException | ExecutionException | TimeoutException ignored) {
+      // A failed background save already reported itself.
+    }
+  }
+
   // ---------------------------------------------------------------- map input
 
-  void tap(int r) {
-    if (!interactive()) return;
-    action(() -> choose(r));
+  /** A tap on a territory. Returns true when it was a game move (not just a look). */
+  boolean tap(int r) {
+    if (game == null) return false;
+    if (!interactive()) {
+      inspect(r);
+      return false;
+    }
+    try {
+      boolean move = choose(r);
+      if (move) {
+        inspect = -1;
+        acted = true;
+        checkTurn();
+      }
+      return move;
+    } catch (IllegalArgumentException | IllegalStateException e) {
+      say(e.getMessage(), true);
+      return false;
+    } finally {
+      Gdx.graphics.requestRendering();
+    }
+  }
+
+  // ---------------------------------------------------------------- dragging armies
+
+  /** True when a drag starting on this territory's badge may carry armies out of it. */
+  boolean canDragFrom(int r) {
+    if (!interactive() || game.state.phase != FORTIFY) return false;
+    GameState s = game.state;
+    return s.owners[r] == s.active && game.movable(r) > 0;
+  }
+
+  void dragBegin(int r) {
+    dragFrom = from = r;
+    to = -1;
+    inspect = -1;
+    dragOver = -1;
+    dragValid = false;
+    haptic(10);
+  }
+
+  /** Follows the finger; {@code over} is the territory under it, or -1. */
+  void dragMove(float x, float y, int over) {
+    if (dragFrom < 0) return;
+    dragX = x;
+    dragY = y;
+    dragOver = over;
+    dragValid = over >= 0 && over != dragFrom && game.state.owners[over] == game.state.active
+        && game.connected(dragFrom, over, game.state.active);
+  }
+
+  void dragCancel() {
+    dragFrom = dragOver = -1;
+    dragValid = false;
+  }
+
+  /**
+   * Drops the armies on {@code over}. A valid drop selects the move (all movable armies, adjustable
+   * with the slider) to be confirmed with MOVE, so a stray drag never moves anything by itself.
+   */
+  void dragEnd(int over) {
+    int source = dragFrom;
+    dragCancel();
+    if (source < 0 || !interactive() || over < 0 || over == source) return;
+    GameState s = game.state;
+    if (s.owners[over] != s.active) {
+      say("You can only move armies onto your own territories.", true);
+    } else if (!game.connected(source, over, s.active)) {
+      say(game.name(over) + " is not connected to " + game.name(source) + " through your land.", true);
+    } else {
+      from = source;
+      to = over;
+      amount = game.movable(source);
+      haptic(15);
+    }
+    Gdx.graphics.requestRendering();
   }
 
   void tapOcean() {
+    inspect = -1;
+    spotlight = null;
     if (interactive() && game.state.phase != OCCUPY) from = to = -1;
   }
 
-  private void choose(int r) {
+  void inspect(int r) {
+    inspect = inspect == r ? -1 : r;
+  }
+
+  private boolean choose(int r) {
     GameState s = game.state;
     boolean own = s.owners[r] == s.active;
-    String owner = s.players.get(s.owners[r]).name;
     switch (s.phase) {
       case SETUP, REINFORCE -> {
-        if (!own) refuse(game.name(r) + " belongs to " + owner + ". Place armies on your own land.");
-        if (s.reserve == 0)
-          refuse(
+        if (!own) {
+          inspect(r);
+          return false;
+        }
+        if (s.reserve == 0) {
+          inspect(r);
+          say(
               s.phase == SETUP
                   ? "All armies placed. Tap FINISH PLACEMENT."
-                  : "No armies left to place. Trade cards or start attacking.");
-        from = from == r ? -1 : r;
-        to = -1;
-        amount = s.reserve;
+                  : "No armies left to place. Trade cards or start attacking.",
+              false);
+          return false;
+        }
+        place(r);
+        return true;
       }
       case ATTACK -> {
         if (own) {
           if (r == from) {
             from = to = -1;
-            return;
+            return true;
           }
-          if (s.armies[r] < 2) refuse(game.name(r) + " needs at least 2 armies to attack.");
-          if (!canAttackFrom(r)) refuse(game.name(r) + " has no enemy neighbours.");
+          if (!canAttackFrom(r)) {
+            inspect(r);
+            say(
+                s.armies[r] < 2
+                    ? game.name(r) + " needs at least 2 armies to attack."
+                    : game.name(r) + " has no enemy neighbours.",
+                false);
+            return false;
+          }
           from = r;
           to = -1;
         } else if (from >= 0 && game.canAttack(from, r)) {
@@ -497,52 +795,47 @@ final class GameHud {
           for (int n : game.neighbours(r))
             if (s.owners[n] == s.active && s.armies[n] > 1 && (best < 0 || s.armies[n] > s.armies[best]))
               best = n;
-          if (best < 0) refuse("None of your territories with 2+ armies borders " + game.name(r) + ".");
+          if (best < 0) {
+            inspect(r);
+            say("None of your territories with 2+ armies borders " + game.name(r) + ".", false);
+            return false;
+          }
           from = best;
           to = r;
         }
         dice = (int) Math.min(3, s.armies[from] - 1);
+        closeIn(from);
+        return true;
       }
-      case OCCUPY -> refuse("Choose how many armies move into " + game.name(s.occupationTo) + ".");
+      case OCCUPY -> {
+        say("First choose how many armies move into " + game.name(s.occupationTo) + ".", false);
+        return false;
+      }
       case FORTIFY -> {
-        if (!own) refuse("You can only move armies between your own territories.");
+        if (!own) {
+          inspect(r);
+          return false;
+        }
         if (r == from) {
           from = to = -1;
         } else if (from >= 0 && game.connected(from, r, s.active)) {
           to = r;
           amount = game.movable(from);
         } else {
-          if (game.movable(r) <= 0)
-            refuse(
+          if (game.movable(r) <= 0) {
+            inspect(r);
+            say(
                 s.armies[r] < 2
                     ? game.name(r) + " has only one army; it must stay."
-                    : "Armies in " + game.name(r) + " already moved this turn.");
+                    : "Armies in " + game.name(r) + " already moved this turn.",
+                false);
+            return false;
+          }
           from = r;
           to = -1;
+          closeIn(from);
         }
-      }
-      default -> {}
-    }
-  }
-
-  boolean key(int key) {
-    if (!interactive()) return false;
-    switch (key) {
-      case Input.Keys.ENTER, Input.Keys.SPACE -> {
-        GameState s = game.state;
-        if ((s.phase == SETUP || s.phase == REINFORCE) && from >= 0 && s.reserve > 0)
-          action(this::deploy);
-        else if (s.phase == FORTIFY && from >= 0 && to >= 0) action(this::fortify);
-        else action(this::primary);
         return true;
-      }
-      case Input.Keys.B -> {
-        if (game.state.phase == ATTACK && from >= 0 && to >= 0) action(() -> roll(true));
-        return true;
-      }
-      case Input.Keys.R -> {
-        if (game.state.phase == ATTACK && from >= 0 && to >= 0) action(() -> roll(false));
-        return to >= 0;
       }
       default -> {
         return false;
@@ -550,35 +843,129 @@ final class GameHud {
     }
   }
 
-  // ---------------------------------------------------------------- commands
-
-  private void pop(int region, String text, Color color) {
-    floaters.add(new Floater(region, text, color, clock));
+  /** On small screens, zooms in on a chosen territory and its neighbours if they are too small to tap. */
+  private void closeIn(int r) {
+    if (!compact || app.camera.zoom >= 2.2f) return;
+    List<Integer> area = new ArrayList<>();
+    area.add(r);
+    for (int n : game.neighbours(r))
+      if (Math.abs(app.board.regions.get(n).anchor.x - app.board.regions.get(r).anchor.x) < 400) area.add(n);
+    frame(area);
   }
 
-  private void deploy() {
+  boolean key(int key) {
+    if (!interactive()) {
+      if (game != null && !humanTurn() && key == Input.Keys.SPACE) {
+        skipping = true;
+        return true;
+      }
+      return false;
+    }
     GameState s = game.state;
-    if (from < 0) refuse("Tap one of your territories first.");
-    long n = Math.max(1, Math.min(amount, s.reserve));
-    game.deploy(from, n);
-    pop(from, "+" + n, AtlasApp.GOLD);
+    switch (key) {
+      case Input.Keys.ENTER, Input.Keys.SPACE -> {
+        if (s.phase == FORTIFY && from >= 0 && to >= 0) action(this::fortify);
+        else action(this::primary);
+        return true;
+      }
+      case Input.Keys.B -> {
+        if (s.phase == ATTACK && from >= 0 && to >= 0) action(() -> roll(true));
+        return true;
+      }
+      case Input.Keys.R -> {
+        if (s.phase == ATTACK && from >= 0 && to >= 0) action(() -> roll(false));
+        return to >= 0;
+      }
+      case Input.Keys.U, Input.Keys.Z -> {
+        if (game.canUndo()) action(this::undo);
+        return true;
+      }
+      case Input.Keys.A -> {
+        if ((s.phase == SETUP || s.phase == REINFORCE) && s.reserve > 0) action(this::autoPlace);
+        return true;
+      }
+      default -> {
+        return false;
+      }
+    }
+  }
+
+  boolean modalKey(int key) {
+    if (key == Input.Keys.ENTER && modal == Modal.HANDOVER) {
+      startHumanTurn();
+      return true;
+    }
+    return false;
+  }
+
+  boolean typed(char c) {
+    return screens.typed(c);
+  }
+
+  boolean editKey(int key) {
+    return screens.editKey(key);
+  }
+
+  // ---------------------------------------------------------------- commands
+
+  int placeAmount() {
+    long reserve = game.state.reserve;
+    int step = PLACE_STEPS[placeStep];
+    return (int) Math.min(reserve, step == 0 ? reserve : step);
+  }
+
+  private void place(int r) {
+    GameState s = game.state;
+    long n = Math.max(1, Math.min(s.reserve, PLACE_STEPS[placeStep] == 0 ? s.reserve : PLACE_STEPS[placeStep]));
+    game.deploy(r, n);
+    dismissRecap();
+    from = r;
+    afterPlacing();
+  }
+
+  private void afterPlacing() {
+    GameState s = game.state;
     if (s.reserve == 0) {
       from = -1;
       if (s.phase == REINFORCE
           && game.findSet(s.active).isEmpty()
           && s.players.get(s.active).cards.size() < 5) {
         game.finishDeployment();
-        say("All armies placed. Attack!", false);
+        say("All armies placed. Attack! (UNDO takes back the last placement.)", false);
       }
-    } else amount = s.reserve;
+    }
   }
 
-  private void roll(boolean blitz) {
+  void autoPlace() {
+    GameState s = game.state;
+    if (s.reserve <= 0) refuse("No armies left to place.");
+    BotStrategy.Placement plan = bots.suggestDeployment();
+    if (plan.regions().length == 0) refuse("No placement to suggest.");
+    game.deployPlan(plan.regions(), plan.amounts());
+    dismissRecap();
+    from = -1;
+    say(
+        "Placed on "
+            + plan.regions().length
+            + (plan.regions().length == 1 ? " territory" : " territories")
+            + ". UNDO puts them back.",
+        false);
+    afterPlacing();
+  }
+
+  void undo() {
+    game.undo();
+    from = to = -1;
+    say("Undone.", false);
+  }
+
+  void roll(boolean blitz) {
     GameState s = game.state;
     if (from < 0 || to < 0) refuse("Pick your territory, then an enemy neighbour.");
     int f = from, t = to, rolls = 0;
     long a0 = s.armies[f], d0 = s.armies[t];
     String target = game.name(t);
+    dismissRecap();
     do {
       int n = (int) Math.min(blitz ? 3 : dice, s.armies[f] - 1);
       game.attack(f, t, n);
@@ -587,10 +974,7 @@ final class GameHud {
     shownAttack = s.attackDice.clone();
     shownDefend = s.defendDice.clone();
     long lostA = a0 - s.armies[f], lostD = d0 - s.armies[t];
-    if (lostA > 0) pop(f, "-" + lostA, RED);
-    if (lostD > 0) pop(t, "-" + lostD, RED);
-    animation = .5f;
-    if (soundEnabled && diceSound != null) diceSound.play(.45f);
+    animation = .35f;
     boolean captured = s.phase == OCCUPY || s.phase == FINISHED || s.owners[t] == s.active;
     rollSummary =
         (blitz ? "Blitz · " + rolls + (rolls == 1 ? " roll · " : " rolls · ") : "")
@@ -600,7 +984,6 @@ final class GameHud {
             + lostD;
     if (captured) {
       amount = s.phase == OCCUPY ? s.armies[f] - 1 : 0;
-      if (soundEnabled && winSound != null) winSound.play(.5f);
       if (s.phase != FINISHED) say(target + " captured!", false);
     } else if (s.armies[f] < 2) {
       say(game.name(f) + " has no armies left to attack with.", false);
@@ -608,12 +991,11 @@ final class GameHud {
     } else dice = (int) Math.min(dice, s.armies[f] - 1);
   }
 
-  private void occupy() {
+  void occupy() {
     GameState s = game.state;
     int f = s.occupationFrom, t = s.occupationTo;
     long n = Math.max(s.occupationMinimum, Math.min(amount, s.armies[f] - 1));
     game.occupy(n);
-    pop(t, "+" + n, AtlasApp.GOLD);
     to = -1;
     // Keep the push going from the newly captured territory when it can attack again.
     if (s.phase == ATTACK) {
@@ -622,46 +1004,37 @@ final class GameHud {
     } else from = -1;
   }
 
-  private void fortify() {
+  void fortify() {
     if (from < 0 || to < 0) refuse("Pick a territory to move from, then a destination.");
     long n = Math.max(1, Math.min(amount, game.movable(from)));
     game.fortify(from, to, n);
-    pop(from, "-" + n, AtlasApp.MUTED);
-    pop(to, "+" + n, AtlasApp.GOLD);
     say("Moved " + n + " from " + game.name(from) + " to " + game.name(to) + ".", false);
     from = to = -1;
   }
 
-  private void trade() {
+  void trade() {
     GameState s = game.state;
     List<Integer> set = cards.size() == 3 ? new ArrayList<>(cards) : game.findSet(s.active);
     if (set.isEmpty()) refuse("You do not have a matching set yet.");
     long before = s.reserve;
-    long[] armies = s.armies.clone();
     game.tradeCards(new ArrayList<>(set));
     cards.clear();
-    String bonus = "";
-    for (int i = 0; i < armies.length; i++)
-      if (s.armies[i] > armies[i]) {
-        pop(i, "+" + (s.armies[i] - armies[i]), AtlasApp.GOLD);
-        bonus = " (+2 on " + game.name(i) + ")";
-      }
-    say("Cards traded for " + (s.reserve - before) + " armies" + bonus + ".", false);
-    amount = s.reserve;
+    say("Cards traded for " + (s.reserve - before) + " armies.", false);
   }
 
-  private void primary() {
+  void primary() {
     GameState s = game.state;
+    dismissRecap();
     switch (s.phase) {
       case SETUP -> {
-        if (s.reserve > 0) refuse("Place all " + s.reserve + " remaining armies first.");
+        if (s.reserve > 0) refuse("Place all " + s.reserve + " remaining armies first (or tap AUTO).");
         from = -1;
         game.finishDeployment();
       }
       case REINFORCE -> {
         if (s.players.get(s.active).cards.size() >= 5)
           refuse("You hold five or more cards. Trade a set first.");
-        if (s.reserve > 0) refuse("Place all " + s.reserve + " remaining armies first.");
+        if (s.reserve > 0) refuse("Place all " + s.reserve + " remaining armies first (or tap AUTO).");
         from = -1;
         game.finishDeployment();
       }
@@ -680,432 +1053,107 @@ final class GameHud {
 
   // ---------------------------------------------------------------- frame
 
+  /** Sizes the map for this frame: beside a dock on phones, above a console elsewhere. */
+  void layoutMap() {
+    float W = app.W, H = app.H;
+    compact = compactNow();
+    if (compact) {
+      dockW = Draw.clamp(W * .33f, 264, 340);
+      mapX = 0;
+      mapY = 0;
+      mapW = W - dockW;
+      mapH = H;
+      app.camera.setRect(0, 0, mapW, H);
+      app.camera.setInsets(0, 0, game != null ? 42 : 0, 0);
+    } else {
+      topH = 52;
+      consoleH = Draw.clamp(H * .26f, 200, 250);
+      mapX = 0;
+      mapY = consoleH;
+      mapW = W;
+      mapH = H - consoleH - topH;
+      app.camera.setRect(0, consoleH, W, mapH);
+      app.camera.setInsets(0, 0, 0, 0);
+    }
+  }
+
   void render() {
-    clock += Math.min(.1f, Gdx.graphics.getDeltaTime());
+    float dt = Math.min(.1f, Gdx.graphics.getDeltaTime());
+    clock += dt;
     if (game != null) {
       checkTurn();
-      if (!game.state.players.get(game.state.active).human
-          && game.state.phase != FINISHED
-          && modal == Modal.NONE) {
-        try {
-          for (int i = 0;
-              i < 12
-                  && !game.state.players.get(game.state.active).human
-                  && game.state.phase != FINISHED;
-              i++) bots.step();
-          checkTurn();
-        } catch (RuntimeException e) {
-          say("Bot paused: " + e.getMessage(), true);
-          modal = Modal.SETTINGS;
-        }
+      playBots(dt);
+      if (animation > 0) animation = Math.max(0, animation - dt);
+      floaters.removeIf(f -> clock - f.born > 1.4f);
+      maybeSave();
+      if (saveError != null) {
+        say(saveError, true);
+        saveError = null;
       }
-      if (animation > 0) animation = Math.max(0, animation - Gdx.graphics.getDeltaTime());
-      if (!game.state.players.get(game.state.active).human && modal == Modal.NONE)
-        Gdx.graphics.requestRendering();
-      floaters.removeIf(f -> clock - f.born() > 1.4f);
     }
     mapOverlay();
-    topBar();
-    console();
+    if (compact) dock();
+    else {
+      topBar();
+      console();
+    }
     if (modal != Modal.NONE) {
       app.hits.clear();
       app.sliders.clear();
-      drawModal();
+      screens.draw();
     }
     drawToast();
   }
 
-  // ---------------------------------------------------------------- drawing primitives
+  // ---------------------------------------------------------------- shared pieces
 
-  private void box(float x, float y, float w, float h, Color c) {
-    app.begin();
-    app.rect(x, y, w, h, c);
-    app.shapes.end();
-  }
-
-  private void round(float x, float y, float w, float h, float r, Color c) {
-    app.begin();
-    app.round(x, y, w, h, r, c);
-    app.shapes.end();
-  }
-
-  private void txt(String s, float x, float y, Color c) {
-    text(app.gameFont, s, x, y, c);
-  }
-
-  private void text(BitmapFont f, String s, float x, float y, Color c) {
-    app.batch.begin();
-    app.text(f, s, x, y, c);
-    app.batch.end();
-  }
-
-  private void center(BitmapFont f, String s, float x, float y, Color c) {
-    app.batch.begin();
-    app.centered(f, s, x, y, c);
-    app.batch.end();
-  }
-
-  private void right(BitmapFont f, String s, float x, float y, Color c) {
-    text(f, s, x - app.width(f, s), y, c);
-  }
-
-  /** Draws text shrunk to fit a width. */
-  private void fit(BitmapFont f, String s, float x, float y, float w, Color c) {
-    float measured = app.width(f, s);
-    float scale = Math.min(1, w / Math.max(1, measured));
-    f.getData().setScale(scale);
-    text(f, s, x, y, c);
-    f.getData().setScale(1);
-  }
-
-  private void wrap(String s, float x, float y, float w, Color c) {
-    wrap(app.gameFont, s, x, y, w, c);
-  }
-
-  private void wrap(BitmapFont f, String s, float x, float y, float w, Color c) {
-    app.batch.begin();
-    app.wrap(f, s, x, y, w, c);
-    app.batch.end();
-  }
-
-  private Color playerColor(int p) {
-    return Color.valueOf(game.state.color(p));
-  }
-
-  private void token(float x, float y, float r, Color c) {
-    app.begin();
-    app.shapes.setColor(AtlasApp.INK);
-    app.shapes.circle(x, y, r + 1.5f, 20);
-    app.shapes.setColor(new Color(c).mul(.68f, .68f, .68f, 1));
-    app.shapes.circle(x, y, r, 20);
-    app.shapes.setColor(new Color(c).lerp(AtlasApp.WHITE, .1f));
-    app.shapes.circle(x, y, r * .83f, 20);
-    app.shapes.end();
-  }
-
-  private void button(String label, float x, float y, float w, Runnable run) {
-    button(label, x, y, w, 52, Style.NORMAL, run);
-  }
-
-  private void button(String label, float x, float y, float w, boolean active, Runnable run) {
-    button(label, x, y, w, 52, active ? Style.SELECTED : Style.NORMAL, run);
-  }
-
-  private void button(
-      String label, float x, float y, float w, float h, Style style, Runnable run) {
-    Color bg =
-        switch (style) {
-          case PRIMARY -> AtlasApp.GOLD;
-          case SELECTED -> RAISED_HI;
-          case DANGER -> RED;
-          case DISABLED -> OFF;
-          default -> RAISED;
-        };
-    Color fg =
-        switch (style) {
-          case PRIMARY -> AtlasApp.INK;
-          case DISABLED -> AtlasApp.MUTED;
-          case SELECTED -> AtlasApp.GOLD;
-          default -> AtlasApp.WHITE;
-        };
-    app.begin();
-    if (style == Style.SELECTED) app.round(x - 2, y - 2, w + 4, h + 4, 10, AtlasApp.GOLD);
-    if (style == Style.PRIMARY) app.round(x, y - 3, w, h, 9, GOLD_DARK);
-    if (style == Style.DANGER) app.round(x, y - 3, w, h, 9, new Color(RED).mul(.7f, .7f, .7f, 1));
-    if (style == Style.NORMAL) app.round(x, y - 2, w, h, 9, AtlasApp.INK);
-    app.round(x, y, w, h, 8, bg);
-    app.shapes.end();
-    if (label.equals("−")) {
-      box(x + w / 2 - 9, y + h / 2 - 1.5f, 18, 3, fg);
-      app.hits.add(new AtlasApp.Hit(new Rectangle(x, y, w, h), () -> action(run)));
-      return;
-    }
-    BitmapFont f = app.gameFont;
-    float measured = app.width(f, label), scale = Math.min(1, (w - 20) / Math.max(1, measured));
-    f.getData().setScale(scale);
-    app.batch.begin();
-    app.centered(f, label, x + w / 2, y + h / 2 + f.getCapHeight() / 2, fg);
-    app.batch.end();
-    f.getData().setScale(1);
-    app.hits.add(new AtlasApp.Hit(new Rectangle(x, y, w, h), () -> action(run)));
-  }
-
-  private void die(float x, float y, float size, int n, Color face, Color pip) {
-    app.begin();
-    app.round(x + 1, y - 2, size, size, size * .18f, AtlasApp.alpha(Color.BLACK, .4f));
-    app.round(x, y, size, size, size * .18f, face);
-    app.shapes.setColor(pip);
-    float c = size / 2, o = size * .27f, pr = size * .085f;
-    float[][] spots =
-        switch (n) {
-          case 1 -> new float[][] {{0, 0}};
-          case 2 -> new float[][] {{-1, -1}, {1, 1}};
-          case 3 -> new float[][] {{-1, -1}, {0, 0}, {1, 1}};
-          case 4 -> new float[][] {{-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
-          case 5 -> new float[][] {{-1, -1}, {1, 1}, {-1, 1}, {1, -1}, {0, 0}};
-          default -> new float[][] {{-1, -1}, {1, 1}, {-1, 1}, {1, -1}, {-1, 0}, {1, 0}};
-        };
-    for (float[] p : spots) app.shapes.circle(x + c + p[0] * o, y + c + p[1] * o, pr, 12);
-    app.shapes.end();
-  }
-
-  /** A horizontal amount slider with − / + steppers on either side. */
-  private void amountControl(float x, float y, float w, long min, long max) {
-    amount = Math.max(min, Math.min(amount, max));
-    button("−", x, y, 52, 52, Style.NORMAL, () -> amount = Math.max(min, amount - 1));
-    button("+", x + w - 52, y, 52, 52, Style.NORMAL, () -> amount = Math.min(max, amount + 1));
-    float sx = x + 76, sw = w - 152, cy = y + 26;
-    float f = max <= min ? 1 : (amount - min) / (float) (max - min);
-    app.begin();
-    app.round(sx, cy - 4, sw, 8, 4, AtlasApp.INK);
-    app.round(sx, cy - 4, Math.max(8, sw * f), 8, 4, AtlasApp.GOLD);
-    app.shapes.setColor(AtlasApp.INK);
-    app.shapes.circle(sx + sw * f, cy, 16, 24);
-    app.shapes.setColor(AtlasApp.GOLD);
-    app.shapes.circle(sx + sw * f, cy, 13, 24);
-    app.shapes.end();
-    app.small.getData().setScale(1);
-    text(app.small, Long.toString(min), sx, y - 2, AtlasApp.MUTED);
-    right(app.small, Long.toString(max), sx + sw, y - 2, AtlasApp.MUTED);
-    if (max > min)
-      app.sliders.add(
-          new AtlasApp.Slider(
-              new Rectangle(sx - 16, y, sw + 32, 52),
-              v -> {
-                amount = min + Math.round(v * (max - min));
-                Gdx.graphics.requestRendering();
-              }));
-  }
-
-  // ---------------------------------------------------------------- top bar
-
-  private void topBar() {
-    box(0, 944, 1600, 56, CONSOLE);
-    box(0, 944, 1600, 2, LINE);
-    text(app.heading, "SUPREMACY", 20, 984, AtlasApp.WHITE);
-    if (game != null) {
-      GameState s = game.state;
-      text(app.body, "TURN " + Math.max(1, s.turn), 196, 978, AtlasApp.MUTED);
-      if (s.phase != FINISHED) {
-        token(300, 972, 9, playerColor(s.active));
-        txt(s.players.get(s.active).name + "  ·  " + phaseName(s.phase), 318, 982, AtlasApp.WHITE);
-      }
-    }
-    boolean human = humanTurn();
-    int hand = human ? game.state.players.get(game.state.active).cards.size() : 0;
-    boolean set = human && !game.findSet(game.state.active).isEmpty();
-    button(
-        human ? "CARDS  " + hand : "CARDS",
-        980,
-        952,
-        150,
-        40,
-        set ? Style.SELECTED : Style.NORMAL,
-        () -> open(Modal.CARDS));
-    int inbox = human ? game.inbox().size() : 0;
-    button(
-        inbox > 0 ? "DIPLOMACY  " + inbox : "DIPLOMACY",
-        1140,
-        952,
-        190,
-        40,
-        inbox > 0 ? Style.SELECTED : Style.NORMAL,
-        () -> open(Modal.DIPLOMACY));
-    button(
-        "LOG",
-        1340,
-        952,
-        110,
-        40,
-        Style.NORMAL,
-        () -> {
-          if (game == null) return;
-          List<String> recent = new ArrayList<>();
-          List<GameState.Notice> history = game.state.history;
-          for (int i = history.size() - 1; i >= 0 && recent.size() < 54; i--)
-            recent.add(history.get(i).message);
-          report = recent;
-          open(Modal.REPORT);
-          if (modal == Modal.REPORT) logMode = true;
-        });
-    button("MENU", 1460, 952, 128, 40, Style.NORMAL, () -> open(Modal.SETTINGS));
-  }
-
-  private String phaseName(GameState.Phase p) {
+  String phaseName(GameState.Phase p) {
     return switch (p) {
       case SETUP -> "PLACE ARMIES";
       case REINFORCE -> "REINFORCE";
       case ATTACK -> "ATTACK";
       case OCCUPY -> "OCCUPY";
       case FORTIFY -> "FORTIFY";
-      case FINISHED -> "VICTORY";
+      case FINISHED -> "GAME OVER";
     };
   }
 
-  // ---------------------------------------------------------------- map overlays
-
-  private void mapOverlay() {
-    float y0 = AtlasCamera.Y;
-    // Zoom controls.
-    button("+", 1540, y0 + 116, 48, 48, Style.NORMAL, () -> app.camera.zoomAt(1.35f, 800, 606));
-    button("−", 1540, y0 + 64, 48, 48, Style.NORMAL, () -> app.camera.zoomAt(.74f, 800, 606));
-    button("FIT", 1540, y0 + 12, 48, 48, Style.NORMAL, () -> app.camera.reset());
-    if (game != null) legend();
-    if (game != null && game.state.phase == FINISHED) victoryBanner();
-    else if (game != null && !game.state.players.get(game.state.active).human)
-      banner(game.state.players.get(game.state.active).name + " is taking their turn…");
-    tooltip();
+  Color playerColor(int p) {
+    return Color.valueOf(game.state.color(p));
   }
 
-  private void banner(String message) {
-    float w = app.width(app.gameFont, message) + 48;
-    round(800 - w / 2, 884, w, 46, 23, AtlasApp.alpha(AtlasApp.INK, .9f));
-    center(app.gameFont, message, 800, 915, AtlasApp.WHITE);
+  static float mid(BitmapFont f, float y, float h) {
+    return y + h / 2 + f.getCapHeight() / 2;
   }
 
-  private void victoryBanner() {
-    GameState s = game.state;
-    float y = 500;
-    round(450, y, 700, 190, 18, AtlasApp.INK);
-    round(450, y + 178, 700, 12, 6, playerColor(s.winner));
-    center(app.title, "WORLD CONQUERED", 800, y + 152, AtlasApp.GOLD);
-    center(
-        app.gameFont,
-        s.players.get(s.winner).name + " rules all " + s.owners.length + " territories.",
-        800,
-        y + 96,
-        AtlasApp.WHITE);
-    button("NEW GAME", 660, y + 18, 280, 52, Style.PRIMARY, () -> modal = Modal.MENU);
+  private void headerButtons(float x, float y, float w, float h) {
+    boolean human = humanTurn();
+    int hand = human ? game.state.players.get(game.state.active).cards.size() : 0;
+    boolean set = human && !game.findSet(game.state.active).isEmpty();
+    int inbox = human ? game.inbox().size() : 0;
+    float gap = 6, bw = (w - 3 * gap) / 4;
+    d.button(human ? "CARDS " + hand : "CARDS", x, y, bw, h, set ? Draw.Style.SELECTED : Draw.Style.NORMAL, () -> open(Modal.CARDS));
+    d.button(
+        inbox > 0 ? (compact ? "DEALS " : "DIPLOMACY ") + inbox : compact ? "DEALS" : "DIPLOMACY",
+        x + bw + gap,
+        y,
+        bw,
+        h,
+        inbox > 0 ? Draw.Style.SELECTED : Draw.Style.NORMAL,
+        () -> open(Modal.DIPLOMACY));
+    d.button("LOG", x + 2 * (bw + gap), y, bw, h, Draw.Style.NORMAL, () -> open(Modal.LOG));
+    d.button("MENU", x + 3 * (bw + gap), y, bw, h, Draw.Style.NORMAL, () -> open(Modal.SETTINGS));
   }
 
-  private void legend() {
-    float x = 12, y0 = AtlasCamera.Y + 12, w = 262;
-    List<Board.Continent> list = app.board.continents;
-    float h = legendOpen ? 42 + list.size() * 25 : 36;
-    round(x, y0, w, h, 10, AtlasApp.alpha(AtlasApp.INK, .86f));
-    text(app.small, "CONTINENT BONUSES", x + 14, y0 + h - 12, AtlasApp.GOLD);
-    text(app.small, legendOpen ? "HIDE" : "SHOW", x + w - 46, y0 + h - 12, AtlasApp.MUTED);
-    app.hits.add(
-        new AtlasApp.Hit(
-            new Rectangle(x, y0 + h - 36, w, 36), () -> legendOpen = !legendOpen));
-    if (!legendOpen) return;
-    GameState s = game.state;
-    int viewer = s.active;
-    for (int i = 0; i < list.size(); i++) {
-      Board.Continent c = list.get(i);
-      float y = y0 + h - 44 - i * 25;
-      int total = 0, mine = 0, holder = -2;
-      for (int r = 0; r < s.owners.length; r++)
-        if (app.board.regions.get(r).continent == c) {
-          total++;
-          if (s.owners[r] == viewer) mine++;
-          holder = holder == -2 ? s.owners[r] : holder == s.owners[r] ? holder : -1;
-        }
-      box(x + 14, y - 12, 12, 12, Color.valueOf(c.color()));
-      text(app.body, c.name(), x + 34, y, AtlasApp.WHITE);
-      right(app.body, "+" + GameEngine.BONUSES.get(c.name()), x + w - 58, y, AtlasApp.GOLD);
-      if (holder >= 0) token(x + w - 22, y - 6, 7, playerColor(holder));
-      else if (humanTurn())
-        right(app.small, mine + "/" + total, x + w - 10, y - 1, AtlasApp.MUTED);
-    }
-  }
-
-  private void tooltip() {
-    if (game == null
-        || app.hovered == null
-        || modal != Modal.NONE
-        || Gdx.app.getType() != Application.ApplicationType.Desktop) return;
-    GameState s = game.state;
-    int r = app.board.regions.indexOf(app.hovered);
-    String line1 = app.hovered.name,
-        line2 = s.players.get(s.owners[r]).name + " · " + s.armies[r] + (s.armies[r] == 1 ? " army" : " armies"),
-        line3 = app.hovered.continent.name() + " (+" + GameEngine.BONUSES.get(app.hovered.continent.name()) + ")";
-    float w = Math.max(app.width(app.body, line1), Math.max(app.width(app.body, line2), app.width(app.small, line3))) + 28;
-    com.badlogic.gdx.math.Vector2 mouse = app.mouse;
-    float x = Math.min(mouse.x + 18, 1590 - w), y = Math.max(mouse.y - 18, AtlasCamera.Y + 84);
-    round(x, y - 78, w, 78, 8, AtlasApp.alpha(AtlasApp.INK, .94f));
-    box(x, y - 78, 4, 78, playerColor(s.owners[r]));
-    text(app.body, line1, x + 14, y - 10, AtlasApp.WHITE);
-    text(app.body, line2, x + 14, y - 34, playerColor(s.owners[r]));
-    text(app.small, line3, x + 14, y - 58, AtlasApp.MUTED);
-  }
-
-  private void drawToast() {
-    float age = clock - toastAt;
-    if (toast.isEmpty() || age > 3.5f) return;
-    float a = MathUtils.clamp(3.5f - age, 0, 1);
-    float w = Math.min(1200, app.width(app.gameFont, toast) + 56);
-    float y = modal == Modal.NONE ? 818 : 40;
-    round(800 - w / 2, y, w, 50, 25, AtlasApp.alpha(toastError ? Color.valueOf("3A1B1E") : AtlasApp.INK, .95f * a));
-    round(800 - w / 2, y, 8, 50, 4, AtlasApp.alpha(toastError ? RED : AtlasApp.GOLD, a));
-    app.gameFont.getData().setScale(Math.min(1, 1140 / Math.max(1, app.width(app.gameFont, toast))));
-    center(app.gameFont, toast, 800, y + 33, AtlasApp.alpha(toastError ? Color.valueOf("F2A39D") : AtlasApp.WHITE, a));
-    app.gameFont.getData().setScale(1);
-  }
-
-  // ---------------------------------------------------------------- console
-
-  private void console() {
-    box(0, 0, 1600, AtlasCamera.Y, CONSOLE);
-    box(0, AtlasCamera.Y - 2, 1600, 2, LINE);
-    round(12, 12, 420, 244, 12, AtlasApp.PANEL);
-    round(444, 12, 752, 244, 12, AtlasApp.PANEL);
-    round(1208, 12, 380, 244, 12, AtlasApp.PANEL);
-    if (game == null) {
-      center(app.gameFont, "Open the menu to start or resume a game.", 820, 140, AtlasApp.MUTED);
-      return;
-    }
-    roster();
-    actionPanel();
-    commandPanel();
-  }
-
-  private void roster() {
-    GameState s = game.state;
-    text(app.small, "COMMANDERS", 28, 246, AtlasApp.MUTED);
-    right(app.small, "LANDS", 288, 246, AtlasApp.MUTED);
-    right(app.small, "ARMIES", 360, 246, AtlasApp.MUTED);
-    right(app.small, "CARDS", 418, 246, AtlasApp.MUTED);
-    for (int p = 0; p < 5; p++) {
-      int player = p;
-      float y = 186 - p * 42;
-      boolean alive = game.alive(p), active = p == s.active && s.phase != FINISHED;
-      if (active) {
-        round(20, y, 404, 40, 8, RAISED_HI);
-        round(20, y, 6, 40, 3, playerColor(p));
-      }
-      token(46, y + 20, 10, alive ? playerColor(p) : AtlasApp.alpha(AtlasApp.MUTED, .5f));
-      GameState.Player pl = s.players.get(p);
-      Color name = alive ? AtlasApp.WHITE : AtlasApp.MUTED;
-      fit(app.gameFont, pl.name, 66, y + 30, 132, name);
-      text(app.small, pl.human ? "HUMAN" : "CPU", 66 + Math.min(132, app.width(app.gameFont, pl.name)) + 8, y + 26, AtlasApp.MUTED);
-      if (!alive) {
-        right(app.body, "ELIMINATED", 418, y + 28, AtlasApp.MUTED);
-        continue;
-      }
-      right(app.body, Integer.toString(game.count(p)), 288, y + 28, AtlasApp.WHITE);
-      right(app.body, Long.toString(game.total(p)), 360, y + 28, AtlasApp.WHITE);
-      right(app.body, Integer.toString(pl.cards.size()), 418, y + 28, AtlasApp.WHITE);
-      app.hits.add(
-          new AtlasApp.Hit(
-              new Rectangle(20, y, 404, 40),
-              () -> {
-                if (interactive() && player != s.active && game.alive(player)) {
-                  recipient = player;
-                  open(Modal.DIPLOMACY);
-                }
-              }));
-    }
-  }
-
-  private void stepper() {
+  /** Three-step phase track. */
+  private void stepper(float x, float y, float w, float h) {
     GameState s = game.state;
     if (s.phase == SETUP) {
-      round(460, 214, 720, 34, 17, AtlasApp.GOLD);
-      center(app.body, "INITIAL PLACEMENT  ·  EVERY COMMANDER PLACES 55 ARMIES", 820, 237, AtlasApp.INK);
+      d.round(x, y, w, h, h / 2, AtlasApp.GOLD);
+      d.fitCenter(app.small, "INITIAL PLACEMENT · " + game.startingArmies() + " ARMIES EACH", x + w / 2, mid(app.small, y, h), w - 16, AtlasApp.INK);
       return;
     }
-    String[] steps = {"1  REINFORCE", "2  ATTACK", "3  FORTIFY"};
+    String[] steps = compact ? new String[] {"PLACE", "ATTACK", "MOVE"} : new String[] {"1  REINFORCE", "2  ATTACK", "3  FORTIFY"};
     int current =
         switch (s.phase) {
           case REINFORCE -> 0;
@@ -1113,1170 +1161,720 @@ final class GameHud {
           case FORTIFY -> 2;
           default -> 3;
         };
+    float gap = 8, sw = (w - 2 * gap) / 3;
     for (int i = 0; i < 3; i++) {
-      float x = 460 + i * 244;
-      Color fill = i == current ? AtlasApp.GOLD : i < current ? RAISED : OFF;
+      float sx = x + i * (sw + gap);
+      Color fill = i == current ? AtlasApp.GOLD : i < current ? Draw.RAISED : Draw.OFF;
       Color ink = i == current ? AtlasApp.INK : i < current ? AtlasApp.MUTED : AtlasApp.alpha(AtlasApp.MUTED, .7f);
-      round(x, 214, 232, 34, 17, fill);
-      center(app.body, steps[i], x + 116, 237, ink);
-      if (i < 2) {
-        app.begin();
-        app.shapes.setColor(i < current ? AtlasApp.GOLD : LINE);
-        app.shapes.triangle(x + 234, 224, x + 234, 238, x + 242, 231);
-        app.shapes.end();
-      }
+      d.round(sx, y, sw, h, h / 2, fill);
+      d.fitCenter(compact ? app.small : app.body, steps[i], sx + sw / 2, mid(compact ? app.small : app.body, y, h), sw - 10, ink);
     }
   }
 
-  private void actionPanel() {
+  /** The main button and, when possible, UNDO beside it. */
+  private void primaryRow(float x, float y, float w, float h) {
     GameState s = game.state;
-    stepper();
-    float x = 464, w = 712;
     if (s.phase == FINISHED) {
-      wrap(s.players.get(s.winner).name + " conquered the world!", x, 192, w, AtlasApp.GOLD);
-      button("START A NEW GAME", x, 40, 300, 56, Style.PRIMARY, () -> modal = Modal.MENU);
+      d.button("RESULTS", x, y, w * .42f, h, Draw.Style.NORMAL, () -> modal = Modal.RESULT);
+      d.button("NEW GAME", x + w * .42f + 8, y, w * .58f - 8, h, Draw.Style.PRIMARY, () -> modal = Modal.MENU);
       return;
     }
-    if (!s.players.get(s.active).human) {
-      txt(s.players.get(s.active).name + " is taking their turn…", x, 192, AtlasApp.WHITE);
+    if (!humanTurn()) {
+      if (modal != Modal.NONE) return;
+      d.button(fastBots ? "SPEED: FAST" : "SPEED: NORMAL", x, y, w * .46f, h, Draw.Style.NORMAL, this::toggleSpeed);
+      d.button(
+          anyHumanAlive() ? "SKIP TO MY TURN" : "SKIP TO END",
+          x + w * .46f + 8,
+          y,
+          w * .54f - 8,
+          h,
+          skipping ? Draw.Style.SELECTED : Draw.Style.PRIMARY,
+          () -> skipping = true);
       return;
     }
-    switch (s.phase) {
-      case SETUP, REINFORCE -> deployPanel(x, w);
-      case ATTACK -> attackPanel(x, w);
-      case OCCUPY -> occupyPanel(x, w);
-      case FORTIFY -> fortifyPanel(x, w);
-      default -> {}
-    }
-  }
-
-  private void instruction(String message, Color c) {
-    fit(app.gameFont, message, 464, 192, 712, c);
-  }
-
-  /** A small right-pointing arrow aligned with a line of game text whose top is {@code y}. */
-  private void pointer(float x, float y, Color c) {
-    float mid = y - 8;
-    app.begin();
-    app.line(x + 2, mid, x + 16, mid, 3, c);
-    app.shapes.setColor(c);
-    app.shapes.triangle(x + 14, mid + 7, x + 14, mid - 7, x + 24, mid);
-    app.shapes.end();
-  }
-
-  private void territoryLine(int r, long armies, float x, float y) {
-    token(x + 12, y - 8, 11, playerColor(game.state.owners[r]));
-    txt(game.name(r), x + 32, y, AtlasApp.WHITE);
-    float nx = x + 40 + app.width(app.gameFont, game.name(r));
-    txt(Long.toString(armies), nx, y, AtlasApp.GOLD);
-  }
-
-  private void deployPanel(float x, float w) {
-    GameState s = game.state;
     int hand = s.players.get(s.active).cards.size();
-    if (s.reserve == 0) {
-      if (s.phase == SETUP) instruction("All armies placed. Tap FINISH PLACEMENT to continue.", AtlasApp.GOLD);
-      else if (hand >= 5) instruction("You hold " + hand + " cards: trade a set before attacking.", AtlasApp.GOLD);
-      else instruction("All armies placed. Trade cards for more, or start attacking.", AtlasApp.GOLD);
-      return;
-    }
-    if (from < 0 || s.owners[from] != s.active) {
-      from = -1;
-      instruction(
-          "Tap one of your highlighted territories to place " + s.reserve + (s.reserve == 1 ? " army." : " armies."),
-          AtlasApp.WHITE);
-      wrap(
-          app.body,
-          "• Reinforce borders that face enemies and continents you want to hold.\n"
-              + "• Use the slider to split your armies across several territories.\n"
-              + (hand >= 3 ? "• You have " + hand + " cards. Open CARDS to trade a matching set." : "• Capture a territory each turn to earn a card."),
-          x,
-          140,
-          w,
-          AtlasApp.MUTED);
-      return;
-    }
-    instruction("Place armies on " + game.name(from) + ".", AtlasApp.WHITE);
-    territoryLine(from, s.armies[from], x, 150);
-    float nx = x + 54 + app.width(app.gameFont, game.name(from)) + app.width(app.gameFont, "" + s.armies[from]);
-    pointer(nx, 150, AtlasApp.GOLD);
-    txt(Long.toString(s.armies[from] + amount), nx + 34, 150, AtlasApp.GOLD);
-    amountControl(x, 46, 500, 1, s.reserve);
-    button("PLACE " + amount, x + 516, 46, 196, 52, Style.PRIMARY, this::deploy);
-  }
-
-  private void attackPanel(float x, float w) {
-    GameState s = game.state;
-    if (from >= 0 && (s.owners[from] != s.active || s.armies[from] < 2)) from = to = -1;
-    if (to >= 0 && (from < 0 || !game.canAttack(from, to))) to = -1;
-    if (from < 0) {
-      instruction("Choose where to attack from, or tap an enemy territory.", AtlasApp.WHITE);
-      wrap(
-          app.body,
-          "• Gold rings mark your territories that can attack (2+ armies next to an enemy).\n"
-              + "• Tap an enemy first and your strongest neighbour is picked for you.\n"
-              + "• Finished? Tap END ATTACKS to move armies and end your turn.",
-          x,
-          140,
-          w,
-          AtlasApp.MUTED);
-      lastRoll(x, 30);
-      return;
-    }
-    if (to < 0) {
-      instruction("Attack from " + game.name(from) + " (" + s.armies[from] + ") — pick a target.", AtlasApp.WHITE);
-      List<Integer> targets = new ArrayList<>();
-      for (int n : game.neighbours(from)) if (game.canAttack(from, n)) targets.add(n);
-      targets.sort(Comparator.comparingLong(n -> s.armies[n]));
-      for (int i = 0; i < Math.min(8, targets.size()); i++) {
-        int t = targets.get(i);
-        float bx = x + (i % 4) * 180, by = 98 - (i / 4) * 60;
-        String label = game.name(t) + "  " + s.armies[t];
-        button(label, bx + 0, by, 172, 52, Style.NORMAL, () -> to = t);
-        token(bx + 12, by + 40, 6, playerColor(s.owners[t]));
-      }
-      return;
-    }
-    instruction("Battle for " + game.name(to) + " (" + s.players.get(s.owners[to]).name + ")", AtlasApp.WHITE);
-    territoryLine(from, s.armies[from], x, 152);
-    float mx = x + 60 + app.width(app.gameFont, game.name(from)) + app.width(app.gameFont, "" + s.armies[from]);
-    txt("vs", mx, 152, AtlasApp.MUTED);
-    territoryLine(to, s.armies[to], mx + 36, 152);
-    double odds = game.conquestChance(from, to);
-    Color oc = odds >= .7 ? GREEN : odds >= .4 ? AtlasApp.GOLD : RED;
-    right(app.body, "BLITZ WIN CHANCE", x + w - 70, 147, AtlasApp.MUTED);
-    right(app.gameFont, Math.round(odds * 100) + "%", x + w, 152, oc);
-    int maxDice = (int) Math.min(3, s.armies[from] - 1);
-    dice = Math.max(1, Math.min(dice, maxDice));
-    for (int d = 1; d <= 3; d++) {
-      int n = d;
-      float bx = x + (d - 1) * 60;
-      boolean ok = d <= maxDice;
-      if (d == dice) round(bx - 3, 69, 58, 58, 10, AtlasApp.GOLD);
-      die(bx, 72, 52, d, ok ? (d == dice ? PARCHMENT : Color.valueOf("B9B3A3")) : OFF, ok ? AtlasApp.INK : AtlasApp.MUTED);
-      app.hits.add(
-          new AtlasApp.Hit(
-              new Rectangle(bx, 72, 52, 52),
-              () -> action(() -> {
-                if (n > maxDice) refuse("Attacking with " + n + " dice needs " + (n + 1) + " armies.");
-                dice = n;
-              })));
-    }
-    text(app.small, "ATTACK DICE", x, 64, AtlasApp.MUTED);
-    button("ROLL", x + 188, 72, 160, 52, Style.PRIMARY, () -> roll(false));
-    button("BLITZ", x + 360, 72, 160, 52, Style.DANGER, () -> roll(true));
-    button("CANCEL", x + 532, 72, 180, 52, Style.NORMAL, () -> to = -1);
-    lastRoll(x + 188, 30);
-  }
-
-  private void lastRoll(float x, float y) {
-    if (shownAttack.length == 0) return;
-    boolean rolling = animation > 0;
-    int tick = (int) (clock * 24);
-    int[] a = shownAttack.clone(), d = shownDefend.clone();
-    Arrays.sort(a);
-    Arrays.sort(d);
-    int pairs = Math.min(a.length, d.length);
-    for (int i = 0; i < a.length; i++) {
-      int v = rolling ? 1 + (tick + i * 3) % 6 : a[a.length - 1 - i];
-      // After the roll, the losing die of each compared pair is faded.
-      boolean lost = !rolling && i < pairs && a[a.length - 1 - i] <= d[d.length - 1 - i];
-      die(x + i * 36, y, 30, v, lost ? AtlasApp.alpha(RED, .35f) : RED, AtlasApp.WHITE);
-    }
-    float dx = x + 3 * 36 + 18;
-    for (int i = 0; i < d.length; i++) {
-      int v = rolling ? 1 + (tick + i * 2) % 6 : d[d.length - 1 - i];
-      boolean lost = !rolling && i < pairs && a[a.length - 1 - i] > d[d.length - 1 - i];
-      die(dx + i * 36, y, 30, v, lost ? AtlasApp.alpha(PARCHMENT, .3f) : PARCHMENT, AtlasApp.INK);
-    }
-    float sx = dx + 2 * 36 + 16;
-    if (!rolling) fit(app.body, rollSummary, sx, y + 22, 1180 - sx, AtlasApp.WHITE);
-  }
-
-  private void occupyPanel(float x, float w) {
-    GameState s = game.state;
-    int f = s.occupationFrom, t = s.occupationTo;
-    long max = s.armies[f] - 1, min = s.occupationMinimum;
-    instruction(game.name(t) + " captured!  Move armies in from " + game.name(f) + ".", AtlasApp.GOLD);
-    amountControl(x, 86, 500, min, max);
-    text(app.body, game.name(f) + " keeps " + (s.armies[f] - amount), x + 76, 152, AtlasApp.MUTED);
-    button("MOVE " + amount, x + 516, 86, 196, 52, Style.PRIMARY, this::occupy);
-    lastRoll(x, 24);
-  }
-
-  private void fortifyPanel(float x, float w) {
-    GameState s = game.state;
-    if (from >= 0 && (s.owners[from] != s.active || game.movable(from) <= 0)) from = to = -1;
-    if (from < 0) {
-      instruction("Move armies between connected territories, or end your turn.", AtlasApp.WHITE);
-      wrap(
-          app.body,
-          "• Tap a territory to move from, then a highlighted destination.\n"
-              + "• Armies travel through your own connected land (and allies with open borders).\n"
-              + "• Each army can move once per turn. Moving is optional.",
-          x,
-          140,
-          w,
-          AtlasApp.MUTED);
-      return;
-    }
-    if (to < 0) {
-      instruction(
-          "Move from " + game.name(from) + " (" + game.movable(from) + " can move) — pick a highlighted destination.",
-          AtlasApp.WHITE);
-      button("CANCEL", x, 46, 180, 52, Style.NORMAL, () -> from = to = -1);
-      return;
-    }
-    instruction("Move armies from " + game.name(from) + " to " + game.name(to) + ".", AtlasApp.WHITE);
-    territoryLine(from, s.armies[from] - amount, x, 150);
-    float mx = x + 60 + app.width(app.gameFont, game.name(from)) + app.width(app.gameFont, "" + (s.armies[from] - amount));
-    pointer(mx, 150, AtlasApp.MUTED);
-    territoryLine(to, s.armies[to] + amount, mx + 32, 150);
-    amountControl(x, 46, 500, 1, game.movable(from));
-    button("MOVE " + amount, x + 516, 46, 196, 52, Style.PRIMARY, this::fortify);
-  }
-
-  private void commandPanel() {
-    GameState s = game.state;
-    float x = 1226;
-    if (s.phase == FINISHED) {
-      text(app.heading, s.players.get(s.winner).name, x, 244, playerColor(s.winner));
-      text(app.small, "WINNER", x, 206, AtlasApp.MUTED);
-      return;
-    }
-    GameState.Player pl = s.players.get(s.active);
-    fit(app.heading, pl.name, x, 244, 340, playerColor(s.active));
-    text(
-        app.small,
-        pl.human ? "HUMAN COMMANDER" : "COMPUTER  ·  " + s.difficulty.name().toUpperCase(Locale.ROOT),
-        x,
-        208,
-        AtlasApp.MUTED);
-    if (!pl.human) return;
-    int hand = pl.cards.size();
-    boolean canTrade = s.phase == REINFORCE && !game.findSet(s.active).isEmpty();
-    switch (s.phase) {
-      case SETUP, REINFORCE -> {
-        text(app.big, Long.toString(s.reserve), x, 186, AtlasApp.GOLD);
-        text(app.body, s.reserve == 1 ? "ARMY TO PLACE" : "ARMIES TO PLACE", x + 14 + app.width(app.big, "" + s.reserve), 168, AtlasApp.WHITE);
-        if (income != null && s.phase == REINFORCE)
-          text(
-              app.small,
-              "Lands +" + income[0] + "   Continents +" + income[1] + "   Army bonus +" + income[2],
-              x,
-              150,
-              AtlasApp.MUTED);
-      }
-      case ATTACK, OCCUPY ->
-          wrap(
-              app.body,
-              s.conquered
-                  ? "You have captured territory this turn and will draw a card."
-                  : "Capture at least one territory to draw a card at the end of your turn.",
-              x,
-              180,
-              344,
-              s.conquered ? GREEN : AtlasApp.MUTED);
-      case FORTIFY ->
-          wrap(
-              app.body,
-              "Optional: reposition your armies, then end your turn."
-                  + (s.conquered ? " You will draw a card." : ""),
-              x,
-              180,
-              344,
-              AtlasApp.MUTED);
-      default -> {}
-    }
-    if (canTrade)
-      button(
-          "TRADE CARDS  +" + game.nextSetValue(),
-          x - 2,
-          98,
-          348,
-          40,
-          hand >= 5 ? Style.PRIMARY : Style.SELECTED,
-          this::trade);
     String label;
-    Style style = Style.PRIMARY;
+    Draw.Style style = Draw.Style.PRIMARY;
     switch (s.phase) {
       case SETUP -> {
         label = s.reserve > 0 ? "PLACE " + s.reserve + " MORE" : "FINISH PLACEMENT";
-        if (s.reserve > 0) style = Style.DISABLED;
+        if (s.reserve > 0) style = Draw.Style.DISABLED;
       }
       case REINFORCE -> {
         if (hand >= 5) {
           label = "TRADE CARDS FIRST";
-          style = Style.DISABLED;
+          style = Draw.Style.DISABLED;
         } else if (s.reserve > 0) {
           label = "PLACE " + s.reserve + " MORE";
-          style = Style.DISABLED;
+          style = Draw.Style.DISABLED;
         } else label = "START ATTACKING";
       }
       case ATTACK -> label = "END ATTACKS";
-      case OCCUPY -> {
-        label = "MOVE " + amount + " IN";
-      }
+      case OCCUPY -> label = "MOVE " + Math.max(s.occupationMinimum, Math.min(amount, s.armies[s.occupationFrom] - 1)) + " IN";
       case FORTIFY -> label = "END TURN";
       default -> label = "";
     }
-    button(label, x - 2, 26, 348, 62, style, this::primary);
+    float uw = game.canUndo() ? Math.min(96, w * .3f) : 0;
+    if (uw > 0) d.button("UNDO", x, y, uw, h, Draw.Style.NORMAL, this::undo);
+    d.button(label, x + (uw > 0 ? uw + 8 : 0), y, w - (uw > 0 ? uw + 8 : 0), h, style, this::primary);
   }
 
-  // ---------------------------------------------------------------- modals
+  void toggleSpeed() {
+    fastBots = !fastBots;
+    prefs().putBoolean("fastBots", fastBots).flush();
+  }
 
-  private void open(Modal next) {
-    if (game == null || !humanTurn()) {
-      if (next == Modal.SETTINGS) modal = next;
-      else if (game != null && next == Modal.REPORT) modal = next;
+  /** Big reserve count, income or card status. Returns the height used from {@code top}. */
+  private float status(float x, float top, float w) {
+    GameState s = game.state;
+    if (!humanTurn()) return 0;
+    switch (s.phase) {
+      case SETUP, REINFORCE -> {
+        float bigH = compact ? 30 : 38;
+        BitmapFont f = compact ? app.heading : app.big;
+        String n = Long.toString(s.reserve);
+        d.text(f, n, x, top - (bigH - f.getCapHeight()) / 2, AtlasApp.GOLD);
+        float nx = x + app.width(f, n) + 10;
+        d.fit(app.body, s.reserve == 1 ? "ARMY TO PLACE" : "ARMIES TO PLACE", nx, mid(app.body, top - bigH, bigH), w - (nx - x), AtlasApp.WHITE);
+        float used = bigH;
+        if (income != null && s.phase == REINFORCE) {
+          d.fit(
+              app.small,
+              "Lands +" + income[0] + " · Continents +" + income[1] + " · Population +" + income[2],
+              x,
+              top - used - 2,
+              w,
+              AtlasApp.MUTED);
+          used += 18;
+        }
+        return used;
+      }
+      case ATTACK, OCCUPY -> {
+        String note =
+            s.conquered
+                ? "You captured land: you will draw a card."
+                : "Capture a territory this turn to draw a card.";
+        return d.wrap(app.small, note, x, top, w, s.conquered ? GREEN : AtlasApp.MUTED) + 4;
+      }
+      case FORTIFY -> {
+        String note = "Optional: move armies, then END TURN." + (s.conquered ? " You will draw a card." : "");
+        return d.wrap(app.small, note, x, top, w, AtlasApp.MUTED) + 4;
+      }
+      default -> {
+        return 0;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------- phone dock
+
+  private void dock() {
+    float W = app.W, H = app.H, x = W - dockW, pad = 8, ix = x + pad, iw = dockW - 2 * pad;
+    d.box(x, 0, dockW, H, Draw.CONSOLE);
+    d.box(x, 0, 1.5f, H, Draw.LINE);
+    float y = H - pad - 40;
+    if (game == null) {
+      d.wrap(app.body, "Open the menu to start or resume a game.", ix, H / 2, iw, AtlasApp.MUTED);
+      d.button("MENU", ix, pad, iw, 48, Draw.Style.PRIMARY, () -> modal = Modal.MENU);
       return;
     }
-    if (animation > 0) return;
-    modal = next;
-    page = 0;
-    cards.clear();
+    headerButtons(ix, y, iw, 40);
+    GameState s = game.state;
+    y -= 8 + 32;
+    int shown = s.phase == FINISHED ? s.winner : s.active;
+    d.token(ix + 11, y + 16, 9, playerColor(shown));
+    float nameW = d.fit(app.heading, s.players.get(shown).name, ix + 28, mid(app.heading, y, 32), iw - 110, playerColor(shown));
+    d.text(app.small, s.phase == FINISHED ? "WINNER" : "TURN " + Math.max(1, s.turn), ix + 36 + nameW, mid(app.small, y, 32), AtlasApp.MUTED);
+    String who = s.players.get(shown).human ? "HUMAN" : "CPU · " + s.difficulty.name().toUpperCase(Locale.ROOT);
+    d.right(app.small, who, ix + iw, mid(app.small, y, 32), AtlasApp.MUTED);
+    y -= 6 + 22;
+    if (s.phase != FINISHED) stepper(ix, y, iw, 22);
+    float bottom = pad, primH = 48;
+    primaryRow(ix, bottom, iw, primH);
+    float top = y - 10, base = bottom + primH + 8;
+    float used = status(ix, top, iw);
+    if (used > 0) top -= used + 6;
+    actionArea(ix, base, iw, top - base);
   }
 
-  private void panel(String title) {
-    box(0, 0, 1600, 1000, new Color(.02f, .045f, .07f, .9f));
-    round(220, 86, 1160, 828, 18, AtlasApp.PANEL);
-    round(220, 902, 1160, 12, 6, AtlasApp.GOLD);
-    text(app.heading, title, 260, 870, AtlasApp.GOLD);
-    if (modal != Modal.MENU && modal != Modal.HANDOVER)
-      button("CLOSE", 1210, 828, 140, 48, Style.NORMAL, this::closeModal);
+  // ---------------------------------------------------------------- tablet and desktop console
+
+  private void topBar() {
+    float W = app.W, H = app.H, y = H - topH;
+    d.box(0, y, W, topH, Draw.CONSOLE);
+    d.box(0, y, W, 2, Draw.LINE);
+    d.text(app.heading, "SUPREMACY", 16, mid(app.heading, y, topH), AtlasApp.WHITE);
+    float bw = Math.min(520, W * .42f);
+    if (game != null) {
+      GameState s = game.state;
+      float tx = 30 + app.width(app.heading, "SUPREMACY");
+      d.text(app.body, "TURN " + Math.max(1, s.turn), tx, mid(app.body, y, topH), AtlasApp.MUTED);
+      if (s.phase != FINISHED) {
+        float px = tx + app.width(app.body, "TURN 000") + 16;
+        d.token(px + 8, y + topH / 2, 8, playerColor(s.active));
+        d.fit(app.gameFont, s.players.get(s.active).name + "  ·  " + phaseName(s.phase), px + 24, mid(app.gameFont, y, topH), W - bw - px - 40, AtlasApp.WHITE);
+      }
+      headerButtons(W - bw - 12, y + 6, bw, topH - 12);
+    } else d.button("MENU", W - 140, y + 6, 128, topH - 12, Draw.Style.NORMAL, () -> modal = Modal.MENU);
   }
 
-  private void closeModal() {
-    if (modal == Modal.PICK) modal = returnModal;
-    else if (modal == Modal.PLAYER) modal = Modal.MENU;
-    else if (modal == Modal.OFFER || modal == Modal.COMPOSE) modal = Modal.DIPLOMACY;
-    else if (modal == Modal.RULES) modal = rulesReturn;
-    else modal = game == null ? Modal.MENU : Modal.NONE;
-    if (modal == Modal.SETTINGS && game == null) modal = Modal.MENU;
+  private void console() {
+    float W = app.W, C = consoleH;
+    d.box(0, 0, W, C, Draw.CONSOLE);
+    d.box(0, C - 2, W, 2, Draw.LINE);
+    float rw = Draw.clamp(W * .25f, 250, 400), cw = Draw.clamp(W * .23f, 240, 360);
+    float ax = 24 + rw, aw = W - rw - cw - 48;
+    d.round(12, 12, rw, C - 24, 12, AtlasApp.PANEL);
+    d.round(ax, 12, aw, C - 24, 12, AtlasApp.PANEL);
+    d.round(W - 12 - cw, 12, cw, C - 24, 12, AtlasApp.PANEL);
+    if (game == null) {
+      d.center(app.gameFont, "Open the menu to start or resume a game.", W / 2, C / 2 + 8, AtlasApp.MUTED);
+      return;
+    }
+    roster(24, 16, rw - 24, C - 32);
+    GameState s = game.state;
+    float top = C - 24;
+    // The phase track needs height; on shorter screens the top bar's phase name does the job.
+    if (s.phase != FINISHED && C >= 230) {
+      stepper(ax + 14, top - 28, aw - 28, 28);
+      top -= 40;
+    }
+    actionArea(ax + 16, 22, aw - 32, top - 22);
+    // Command column: who is playing, the big number, and the main button.
+    float cx = W - cw, ccw = cw - 24, ct = C - 24;
+    int shown = s.phase == FINISHED ? s.winner : s.active;
+    d.fit(app.heading, s.players.get(shown).name, cx, ct - 4, ccw, playerColor(shown));
+    d.text(
+        app.small,
+        s.phase == FINISHED ? "WINNER" : s.players.get(shown).human ? "HUMAN COMMANDER" : "COMPUTER · " + s.difficulty.name().toUpperCase(Locale.ROOT),
+        cx,
+        ct - 34,
+        AtlasApp.MUTED);
+    status(cx, ct - 50, ccw);
+    primaryRow(cx - 2, 24, ccw + 4, 56);
   }
 
-  private void drawModal() {
-    switch (modal) {
-      case MENU -> menu();
-      case HANDOVER -> handover();
-      case REPORT -> report();
-      case CARDS -> cards();
-      case DIPLOMACY -> diplomacy();
-      case OFFER -> offer();
-      case COMPOSE -> compose();
-      case PICK -> picker();
-      case SETTINGS -> settings();
-      case RULES -> rules();
-      case PLAYER -> editor();
+  private void roster(float x, float y, float w, float h) {
+    GameState s = game.state;
+    float row = Math.min(36, (h - 18) / 5);
+    float top = y + h;
+    d.text(app.small, w < 300 ? "PLAYERS" : "COMMANDERS", x + 4, top - 2, AtlasApp.MUTED);
+    float cLands = x + w - 112, cArmies = x + w - 52, cCards = x + w - 6;
+    d.right(app.small, "LANDS", cLands, top - 2, AtlasApp.MUTED);
+    d.right(app.small, "ARMIES", cArmies, top - 2, AtlasApp.MUTED);
+    d.right(app.small, "CARDS", cCards, top - 2, AtlasApp.MUTED);
+    for (int p = 0; p < 5; p++) {
+      int player = p;
+      float ry = top - 18 - (p + 1) * row;
+      boolean alive = game.alive(p), active = p == s.active && s.phase != FINISHED;
+      if (active) {
+        d.round(x - 4, ry + 1, w + 8, row - 2, 7, Draw.RAISED_HI);
+        d.round(x - 4, ry + 1, 5, row - 2, 2.5f, playerColor(p));
+      }
+      d.token(x + 14, ry + row / 2, 8, alive ? playerColor(p) : AtlasApp.alpha(AtlasApp.MUTED, .5f));
+      GameState.Player pl = s.players.get(p);
+      float nw = d.fit(app.gameFont, pl.name, x + 30, mid(app.gameFont, ry, row), cLands - x - 110, alive ? AtlasApp.WHITE : AtlasApp.MUTED);
+      d.text(app.small, pl.human ? "YOU" : "CPU", x + 36 + nw, mid(app.small, ry, row), AtlasApp.MUTED);
+      if (!alive) {
+        d.right(app.body, "OUT", cCards, mid(app.body, ry, row), AtlasApp.MUTED);
+        continue;
+      }
+      d.right(app.body, Integer.toString(game.count(p)), cLands, mid(app.body, ry, row), AtlasApp.WHITE);
+      d.right(app.body, Long.toString(game.total(p)), cArmies, mid(app.body, ry, row), AtlasApp.WHITE);
+      d.right(app.body, Integer.toString(pl.cards.size()), cCards, mid(app.body, ry, row), AtlasApp.WHITE);
+      d.hit(x - 4, ry, w + 8, row, "player " + pl.name, () -> screens.openDiplomacyWith(player));
+    }
+  }
+
+  // ---------------------------------------------------------------- action area (both layouts)
+
+  private void actionArea(float x, float y, float w, float h) {
+    GameState s = game.state;
+    float top = y + h;
+    if (s.phase == FINISHED) {
+      d.wrap(compact ? app.body : app.gameFont, s.players.get(s.winner).name + " conquered the world in " + s.turn + " turns.", x, top, w, AtlasApp.GOLD);
+      return;
+    }
+    if (!humanTurn()) {
+      String who = s.players.get(s.active).name;
+      float used = d.wrap(compact ? app.body : app.gameFont, watching || !anyHumanAlive() ? "Watching " + who + "…" : who + " is taking their turn…", x, top, w, AtlasApp.WHITE);
+      if (!botAction.isEmpty() && !skipping)
+        used += 6 + d.wrap(app.small, botAction, x, top - used - 6, w, AtlasApp.MUTED);
+      if (!compact)
+        d.wrap(app.small, "Moves play out on the map. Change the speed, or skip ahead.", x, top - used - 12, w, AtlasApp.alpha(AtlasApp.MUTED, .8f));
+      return;
+    }
+    switch (s.phase) {
+      case SETUP, REINFORCE -> deployArea(x, y, w, top);
+      case ATTACK -> attackArea(x, y, w, top);
+      case OCCUPY -> occupyArea(x, y, w, top);
+      case FORTIFY -> fortifyArea(x, y, w, top);
       default -> {}
     }
   }
 
-  private void menu() {
-    panel("");
-    text(app.title, "GAME OF SUPREMACY", 260, 880, AtlasApp.WHITE);
-    text(app.body, "Five commanders. Seven continents. One world.", 262, 826, AtlasApp.MUTED);
-    // Seats.
-    text(app.small, "COMMANDERS  ·  TAP A HUMAN'S NAME TO EDIT NAME AND COLOUR", 260, 780, AtlasApp.GOLD);
-    int[] preview = previewColors();
-    for (int i = 0; i < 5; i++) {
-      int seat = i;
-      float y = 704 - i * 66;
-      boolean human = i < humans;
-      round(260, y, 500, 58, 10, RAISED);
-      token(292, y + 29, 14, Color.valueOf(GameState.COLORS[preview[i]]));
-      if (human) {
-        fit(app.gameFont, seatName[i], 320, y + 40, 230, named[i] ? AtlasApp.WHITE : AtlasApp.MUTED);
-        text(
-            app.small,
-            named[i] ? "Tap to edit name and colour" : "Tap to enter your name",
-            320,
-            y + 17,
-            named[i] ? AtlasApp.MUTED : AtlasApp.GOLD);
-        app.hits.add(
-            new AtlasApp.Hit(new Rectangle(260, y, 320, 58), () -> action(() -> openEditor(seat, false))));
-      } else txt(GameState.BOT_NAMES[i - humans], 320, y + 39, AtlasApp.WHITE);
-      button(
-          human ? "HUMAN" : "COMPUTER",
-          590,
-          y + 9,
-          156,
-          40,
-          human ? Style.SELECTED : Style.NORMAL,
-          () -> {
-            confirmNew = false;
-            if (seat == 0) refuse("Seat 1 is always a human player.");
-            humans = seat < humans ? seat : seat + 1;
-            saveSetup();
-          });
-    }
-    // Skill.
-    text(app.small, "COMPUTER SKILL", 800, 780, AtlasApp.GOLD);
-    GameState.Difficulty[] levels = GameState.Difficulty.values();
-    for (int i = 0; i < levels.length; i++) {
-      int level = i;
-      float bx = 800 + (i % 2) * 280, by = 704 - (i / 2) * 76;
-      boolean chosen = i == difficulty;
-      if (chosen) round(bx - 2, by - 2, 268, 66, 11, AtlasApp.GOLD);
-      round(bx, by, 264, 62, 10, chosen ? RAISED_HI : RAISED);
-      txt(levels[i].name(), bx + 16, by + 46, chosen ? AtlasApp.GOLD : AtlasApp.WHITE);
-      text(app.small, SKILL_NOTES[i], bx + 16, by + 20, AtlasApp.MUTED);
-      app.hits.add(
-          new AtlasApp.Hit(
-              new Rectangle(bx, by, 264, 62),
-              () -> {
-                difficulty = level;
-                confirmNew = false;
-                saveSetup();
-              }));
-    }
-    wrap(
-        app.body,
-        (5 - humans == 0 ? "All five seats are human." : (5 - humans) + " computer opponents share this skill level.")
-            + " Territories are dealt at random and every commander starts with 55 armies."
-            + (humans > 1 ? " Pass the device when prompted; cards stay private." : ""),
-        800,
-        448,
-        540,
-        AtlasApp.MUTED);
-    boolean saved = saves.exists();
-    button("HOW TO PLAY", 260, 120, 240, 64, Style.NORMAL, () -> rules(Modal.MENU));
-    if (game != null && game.state.phase != FINISHED)
-      button(
-          "RETURN TO GAME",
-          520,
-          120,
-          330,
-          64,
-          Style.NORMAL,
-          () -> {
-            lastActive = -1;
-            checkTurn();
-          });
-    else if (saved)
-      button(
-          "RESUME SAVED GAME",
-          520,
-          120,
-          330,
-          64,
-          Style.NORMAL,
-          () -> {
-            GameEngine restored;
-            try {
-              restored = saves.load(app.board);
-            } catch (IllegalStateException e) {
-              if (String.valueOf(e.getMessage()).contains("different board"))
-                refuse("This saved game uses an older version of the map. Start a new game.");
-              throw e;
-            }
-            String warning = saves.warning();
-            attach(restored);
-            if (warning != null && !warning.isEmpty()) say(warning, true);
-          });
-    button(
-        confirmNew ? "TAP AGAIN TO REPLACE SAVE" : "START NEW GAME",
-        870,
-        120,
-        470,
-        64,
-        confirmNew ? Style.DANGER : Style.PRIMARY,
-        this::startPressed);
+  private float instruction(String message, float x, float top, float w, Color c) {
+    return d.wrap(compact ? app.body : app.gameFont, message, x, top, w, c) + 8;
   }
 
-  // ---------------------------------------------------------------- player editor
-
-  private void editor() {
-    panel("PLAYER " + (editing + 1));
-    Color current = Color.valueOf(GameState.COLORS[seatColor[editing]]);
-    token(1160, 862, 20, current);
-    text(app.small, "NAME", 260, 828, AtlasApp.GOLD);
-    round(256, 738, 612, 66, 12, AtlasApp.GOLD);
-    round(259, 741, 606, 60, 10, AtlasApp.INK);
-    if (editText.isEmpty()) text(app.gameFont, "Type your name", 276, 780, AtlasApp.MUTED);
-    else text(app.gameFont, editText, 276, 780, AtlasApp.WHITE);
-    if (((int) (clock * 2)) % 2 == 0) {
-      float cx = 276 + (editText.isEmpty() ? 0 : app.width(app.gameFont, editText)) + 3;
-      box(cx, 752, 3, 38, AtlasApp.GOLD);
-    }
-    right(app.small, editText.length() + " / " + GameState.MAX_NAME, 856, 760, AtlasApp.MUTED);
-    text(app.small, "COLOUR", 260, 722, AtlasApp.GOLD);
-    for (int k = 0; k < GameState.COLORS.length; k++) {
-      int color = k;
-      float cx = 290 + k * 72, cy = 670;
-      boolean chosen = seatColor[editing] == k;
-      int holder = -1;
-      for (int j = 0; j < humans; j++) if (j != editing && seatColor[j] == k) holder = j;
-      if (chosen) token(cx, cy, 31, AtlasApp.GOLD);
-      token(cx, cy, 25, Color.valueOf(GameState.COLORS[k]));
-      if (holder >= 0)
-        center(app.small, Integer.toString(holder + 1), cx, cy + 5, AtlasApp.INK);
-      app.hits.add(
-          new AtlasApp.Hit(
-              new Rectangle(cx - 34, cy - 34, 68, 68), () -> action(() -> pickColor(editing, color))));
-    }
-    text(app.gameFont, GameState.COLOR_NAMES[seatColor[editing]], 880, 680, current);
-    text(app.small, "A number marks a colour another human holds; picking it swaps the two.", 260, 620, AtlasApp.MUTED);
-    String[] rows = {"1234567890", "QWERTYUIOP", "ASDFGHJKL"};
-    float[] ys = {540, 472, 404};
-    for (int r = 0; r < rows.length; r++) {
-      String row = rows[r];
-      float x = 800 - (row.length() * 104 - 8) / 2f;
-      for (int i = 0; i < row.length(); i++) {
-        char c = row.charAt(i);
-        button(String.valueOf(c), x + i * 104, ys[r], 96, 56, Style.NORMAL, () -> press(Character.toLowerCase(c)));
-      }
-    }
-    String letters = "ZXCVBNM";
-    float x3 = 292;
-    button("SHIFT", x3, 336, 140, 56, shift ? Style.SELECTED : Style.NORMAL, () -> shift = !shift);
-    for (int i = 0; i < letters.length(); i++) {
-      char c = letters.charAt(i);
-      button(String.valueOf(c), x3 + 148 + i * 104, 336, 96, 56, Style.NORMAL, () -> press(Character.toLowerCase(c)));
-    }
-    button("DEL", x3 + 148 + 7 * 104, 336, 140, 56, Style.NORMAL, this::backspace);
-    button("-", 444, 268, 96, 56, Style.NORMAL, () -> press('-'));
-    button("'", 548, 268, 96, 56, Style.NORMAL, () -> press('\''));
-    button("SPACE", 652, 268, 400, 56, Style.NORMAL, () -> press(' '));
-    button(".", 1060, 268, 96, 56, Style.NORMAL, () -> press('.'));
-    String next = "DONE";
-    if (editFlow) {
-      boolean more = false;
-      for (int i = editing + 1; i < humans; i++) if (!named[i]) more = true;
-      next = more ? "NEXT PLAYER" : "START GAME";
-    }
-    button(next, 1010, 106, 340, 56, Style.PRIMARY, this::finishEdit);
-  }
-
-  private void newMatch() {
-    saveSetup();
-    attach(
-        new GameEngine(
-            app.board,
-            humans,
-            GameState.Difficulty.values()[difficulty],
-            Long.getLong("supremacy.seed", System.nanoTime()),
-            List.of(seatName).subList(0, humans),
-            Arrays.copyOf(seatColor, humans)));
-  }
-
-  private List<String> visibleReport() {
-    String self = game.state.players.get(game.state.active).name + " ";
-    return report.stream()
-        .filter(l -> !l.contains("; losses"))
-        .filter(l -> logMode || (!l.startsWith(self) && !l.startsWith("Random territories")))
-        .collect(java.util.stream.Collectors.toList());
-  }
-
-  private void handover() {
+  private void deployArea(float x, float y, float w, float top) {
     GameState s = game.state;
-    String name = s.players.get(s.active).name;
-    Color c = playerColor(s.active);
-    box(0, 0, 1600, 1000, new Color(.02f, .045f, .07f, .97f));
-    round(400, 230, 800, 540, 20, AtlasApp.PANEL);
-    round(400, 752, 800, 18, 9, c);
-    token(800, 650, 34, c);
-    center(app.title, name.toUpperCase(Locale.ROOT), 800, 590, AtlasApp.WHITE);
-    center(
-        app.gameFont,
-        s.phase == SETUP ? "Place your starting armies." : "Your turn " + s.turn + " is ready.",
-        800,
-        530,
-        AtlasApp.GOLD);
-    center(app.body, "Pass the device to " + name + ". Everyone else, look away —", 800, 478, AtlasApp.MUTED);
-    center(app.body, "cards stay private until this player continues.", 800, 452, AtlasApp.MUTED);
-    int events = visibleReport().size();
-    if (events > 0 && s.phase != SETUP)
-      center(app.body, events + (events == 1 ? " event" : " events") + " since your last turn.", 800, 410, AtlasApp.WHITE);
-    button(
-        "I'M " + name.toUpperCase(Locale.ROOT) + "  —  START",
-        520,
-        280,
-        560,
-        72,
-        Style.PRIMARY,
-        this::showReport);
-  }
-
-  private void report() {
-    panel(logMode ? "BATTLE LOG  ·  NEWEST FIRST" : "WHILE YOU WERE AWAY");
-    List<String> lines = visibleReport();
-    String me = game.state.players.get(game.state.active).name;
-    float top = 784;
-    if (!logMode) {
-      // Lead with what matters most to the returning player: the land they lost.
-      String marker = " attacked " + me + " and won ";
-      List<String> lost = new ArrayList<>();
-      for (String l : lines)
-        if (l.contains(marker)) lost.add(l.substring(l.indexOf(marker) + marker.length()).replace(".", ""));
-      String summary =
-          lost.isEmpty()
-              ? "Your territories held. No land was lost."
-              : "You lost " + lost.size() + (lost.size() == 1 ? " territory: " : " territories: ") + String.join(", ", lost) + ".";
-      round(260, 742, 1080, 58, 10, lost.isEmpty() ? RAISED : Color.valueOf("3A1B1E"));
-      fit(app.gameFont, summary, 280, 780, 1040, lost.isEmpty() ? GREEN : Color.valueOf("F2A39D"));
-      top = 700;
+    int hand = s.players.get(s.active).cards.size();
+    boolean canTrade = s.phase == REINFORCE && !game.findSet(s.active).isEmpty();
+    float row = compact ? 40 : 44, gap = 6;
+    if (s.reserve == 0) {
+      String m =
+          s.phase == SETUP
+              ? "All armies placed. Tap FINISH PLACEMENT."
+              : hand >= 5 ? "You hold " + hand + " cards: trade a set before attacking." : "All armies placed. Trade cards for more, or start attacking.";
+      top -= instruction(m, x, top, w, AtlasApp.GOLD);
+      if (canTrade) d.button("TRADE CARDS +" + game.nextSetValue(), x, top - row, Math.min(w, 300), row, Draw.Style.SELECTED, this::trade);
+      return;
     }
-    if (lines.isEmpty()) txt("Nothing new to report.", 260, top, AtlasApp.MUTED);
-    int per = logMode ? 9 : 8;
-    for (int i = page * per; i < Math.min(lines.size(), page * per + per); i++) {
-      float y = top - (i - page * per) * 66;
-      String line = lines.get(i);
-      Color dot =
-          line.contains("attacked " + me) || line.contains(me + " was eliminated")
-              ? RED
-              : line.contains(" won ") || line.contains("conquered") ? AtlasApp.GOLD : AtlasApp.MUTED;
-      token(272, y - 12, 6, dot);
-      wrap(line, 296, y, 1040, line.contains("attacked " + me) ? Color.valueOf("F2A39D") : AtlasApp.WHITE);
+    String m = from >= 0 ? "Placed on " + game.name(from) + ". Each tap places:" : "Tap your gold-ringed land. Each tap places:";
+    BitmapFont f = compact ? app.body : app.gameFont;
+    d.fit(f, m, x, top, w, AtlasApp.WHITE);
+    top -= f.getLineHeight() + 6;
+    // Amount chips, with AUTO beside them when the panel is wide enough, otherwise underneath.
+    float cw = Draw.clamp((w - 104 - 4 * gap) / 4, 46, 64);
+    boolean sameRow = w - 4 * (cw + gap) >= 96;
+    if (!sameRow) cw = Math.min(64, (w - 3 * gap) / 4);
+    String[] labels = {"1", "3", "5", "ALL"};
+    for (int i = 0; i < 4; i++) {
+      int step = i;
+      d.button(labels[i], x + i * (cw + gap), top - row, cw, row, placeStep == i ? Draw.Style.SELECTED : Draw.Style.NORMAL, () -> placeStep = step);
     }
-    paging(lines.size(), per);
-    button("CONTINUE", 1050, 106, 300, 56, Style.PRIMARY, () -> modal = Modal.NONE);
-  }
-
-  private void cards() {
-    GameState s = game.state;
-    panel("YOUR CARDS");
-    List<Integer> hand = s.players.get(s.active).cards;
-    text(
-        app.body,
-        "Trade three of a kind, or one of each type. Wilds match anything. Next set: +"
-            + game.nextSetValue()
-            + " armies.",
-        262,
-        826,
-        AtlasApp.MUTED);
-    if (hand.isEmpty())
-      wrap("No cards yet. Capture at least one territory during your turn to draw a card.", 260, 700, 1000, AtlasApp.MUTED);
-    int per = 12;
-    for (int i = page * per; i < Math.min(hand.size(), page * per + per); i++) {
-      int card = hand.get(i), k = i - page * per;
-      float cx = 270 + (k % 6) * 178, cy = (k < 6 ? 560 : 300) + (cards.contains(card) ? 16 : 0);
-      drawCard(card, cx, cy, cards.contains(card));
-      app.hits.add(
-          new AtlasApp.Hit(
-              new Rectangle(cx, cy, 160, 220),
-              () -> {
-                if (!cards.remove(Integer.valueOf(card)) && cards.size() < 3) cards.add(card);
-              }));
-    }
-    if (hand.size() > per) paging(hand.size(), per);
-    boolean valid = cards.size() == 3 && game.validSet(cards);
-    boolean phaseOk = s.phase == REINFORCE;
-    button(
-        "SELECT A SET FOR ME",
-        hand.size() > per ? 640 : 260,
-        106,
-        330,
-        56,
-        Style.NORMAL,
-        () -> {
-          cards.clear();
-          cards.addAll(game.findSet(s.active));
-          if (cards.isEmpty()) refuse("No matching set in your hand yet.");
-        });
-    button(
-        "TRADE IN  +" + game.nextSetValue(),
-        1010,
-        106,
-        340,
-        56,
-        valid && phaseOk ? Style.PRIMARY : Style.DISABLED,
-        () -> {
-          if (!phaseOk) refuse("Cards can be traded during the reinforce step of your turn.");
-          if (!valid) refuse("Select three cards: three of a kind or one of each.");
-          trade();
-          modal = Modal.NONE;
-        });
-  }
-
-  private void drawCard(int card, float x, float y, boolean selected) {
-    int symbol = game.symbol(card);
-    boolean owned = card < game.state.owners.length && game.state.owners[card] == game.state.active;
-    app.begin();
-    if (selected) app.round(x - 5, y - 5, 170, 230, 14, AtlasApp.GOLD);
-    app.round(x + 2, y - 4, 160, 220, 11, AtlasApp.alpha(Color.BLACK, .45f));
-    app.round(x, y, 160, 220, 11, PARCHMENT);
-    app.round(x + 8, y + 8, 144, 204, 7, Color.valueOf("E3D7BA"));
-    if (symbol < 3) app.rect(x + 8, y + 172, 144, 6, Color.valueOf(app.board.regions.get(card).continent.color()));
-    float cx = x + 80, cy = y + 104;
-    Color ink = Color.valueOf("3A3324");
-    switch (symbol) {
-      case 0 -> infantry(cx, cy, ink);
-      case 1 -> cavalry(cx, cy, ink);
-      case 2 -> artillery(cx, cy, ink);
-      default -> star(cx, cy + 6, 34, Color.valueOf("9C7A2E"));
-    }
-    app.shapes.end();
-    String name = symbol == 3 ? "WILD CARD" : game.name(card);
-    app.small.getData().setScale(Math.min(1, 136 / Math.max(1, app.width(app.small, name))));
-    center(app.small, name, x + 80, y + 202, ink);
-    app.small.getData().setScale(1);
-    center(app.small, CARD_TYPES[symbol], x + 80, y + 40, Color.valueOf("6E6247"));
-    if (owned) {
-      round(x + 104, y + 12, 44, 20, 10, AtlasApp.GOLD);
-      center(app.small, "+2", x + 126, y + 27, AtlasApp.INK);
-    }
-  }
-
-  private void infantry(float x, float y, Color c) {
-    app.shapes.setColor(c);
-    app.shapes.circle(x, y + 30, 11, 20);
-    app.shapes.triangle(x - 20, y - 22, x + 20, y - 22, x, y + 22);
-    app.shapes.rect(x - 24, y - 32, 48, 10);
-  }
-
-  private void cavalry(float x, float y, Color c) {
-    for (int i = 0; i < 18; i++) {
-      float a = MathUtils.degreesToRadians * (-50 + i * 280f / 18), b = MathUtils.degreesToRadians * (-50 + (i + 1) * 280f / 18);
-      app.line(x + MathUtils.cos(a) * 26, y + MathUtils.sin(a) * 26, x + MathUtils.cos(b) * 26, y + MathUtils.sin(b) * 26, 11, c);
-    }
-    app.shapes.setColor(Color.valueOf("E3D7BA"));
-    for (int i = 0; i < 6; i++) {
-      float a = MathUtils.degreesToRadians * (-20 + i * 44);
-      app.shapes.circle(x + MathUtils.cos(a) * 26, y + MathUtils.sin(a) * 26, 2.2f, 8);
-    }
-  }
-
-  private void artillery(float x, float y, Color c) {
-    app.line(x - 14, y - 8, x + 30, y + 22, 13, c);
-    app.line(x - 14, y - 8, x - 34, y - 26, 5, c);
-    app.ring(x - 8, y - 16, 14, 4, c);
-    app.shapes.setColor(c);
-    app.shapes.circle(x - 8, y - 16, 4, 10);
-    app.shapes.rect(x - 40, y - 34, 70, 4);
-  }
-
-  private void star(float x, float y, float r, Color c) {
-    app.shapes.setColor(c);
-    for (int k = 0; k < 5; k++) {
-      float a = MathUtils.PI / 2 + k * MathUtils.PI2 / 5;
-      float l = a - MathUtils.PI / 5, rr = a + MathUtils.PI / 5, in = r * .42f;
-      float ox = x + MathUtils.cos(a) * r, oy = y + MathUtils.sin(a) * r;
-      app.shapes.triangle(x, y, x + MathUtils.cos(l) * in, y + MathUtils.sin(l) * in, ox, oy);
-      app.shapes.triangle(x, y, ox, oy, x + MathUtils.cos(rr) * in, y + MathUtils.sin(rr) * in);
-    }
-  }
-
-  private void diplomacy() {
-    panel("DIPLOMACY");
-    text(app.body, "Offers are delivered on the recipient's turn. Responses arrive on your next turn.", 262, 826, AtlasApp.MUTED);
-    List<GameState.Offer> inbox = game.inbox();
-    text(app.small, "INCOMING OFFERS", 280, 780, AtlasApp.GOLD);
-    for (int i = page * 5; i < Math.min(inbox.size(), page * 5 + 5); i++) {
-      GameState.Offer o = inbox.get(i);
-      button(
-          "#" + o.id + "  FROM " + game.state.players.get(o.from).name.toUpperCase(Locale.ROOT) + "  —  REVIEW",
-          280,
-          700 - (i - page * 5) * 64,
-          970,
-          () -> {
-            viewOffer = o;
-            page = 0;
-            modal = Modal.OFFER;
-          });
-    }
-    if (inbox.isEmpty()) txt("No pending offers.", 280, 740, AtlasApp.MUTED);
-    if (inbox.size() > 5) paging(inbox.size(), 5);
-    if (recipient == game.state.active || !game.alive(recipient)) cycleRecipient();
-    text(app.small, "NEW OFFER", 280, 368, AtlasApp.GOLD);
-    button("TO: " + game.state.players.get(recipient).name + "  (change)", 280, 300, 470, () -> cycleRecipient());
-    token(306, 326, 10, playerColor(recipient));
-    button(
-        "COMPOSE OFFER",
-        780,
-        300,
-        470,
-        52,
-        Style.PRIMARY,
-        () -> {
-          draft = new GameState.Offer();
-          draft.from = game.state.active;
-          draft.to = recipient;
-          counterId = -1;
-          armyPage = false;
-          page = 0;
-          modal = Modal.COMPOSE;
-        });
-    boolean borders = game.state.borders[game.state.active][recipient];
-    button(
-        borders ? "REVOKE OPEN BORDERS WITH " + game.state.players.get(recipient).name.toUpperCase(Locale.ROOT) : "NO OPEN BORDERS WITH " + game.state.players.get(recipient).name.toUpperCase(Locale.ROOT),
-        280,
-        230,
-        970,
-        52,
-        borders ? Style.DANGER : Style.DISABLED,
-        () -> {
-          if (borders) {
-            game.revokeBorders(recipient);
-            say("Open borders revoked.", false);
-          } else refuse("Open borders are agreed through an accepted offer.");
-        });
-  }
-
-  private void cycleRecipient() {
-    do {
-      recipient = (recipient + 1) % 5;
-    } while (recipient == game.state.active || !game.alive(recipient));
-  }
-
-  private String gift(long n, int source, int target) {
-    return n == 0
-        ? ""
-        : "; " + n + " armies from " + game.name(source) + " to " + game.name(target);
-  }
-
-  private void offer() {
-    panel("OFFER #" + viewOffer.id + "  FROM " + game.state.players.get(viewOffer.from).name.toUpperCase(Locale.ROOT));
-    List<String> lines = new ArrayList<>();
-    for (int r : viewOffer.giveTerritories) lines.add("YOU RECEIVE TERRITORY: " + game.name(r));
-    for (int r : viewOffer.wantTerritories) lines.add("YOU GIVE TERRITORY: " + game.name(r));
-    if (viewOffer.giveArmies > 0)
-      lines.add("YOU RECEIVE" + gift(viewOffer.giveArmies, viewOffer.giveSource, viewOffer.giveTarget));
-    if (viewOffer.wantArmies > 0)
-      lines.add("YOU SEND" + gift(viewOffer.wantArmies, viewOffer.wantSource, viewOffer.wantTarget));
-    lines.add("MUTUAL OPEN BORDERS: " + (viewOffer.openBorders ? "included" : "not included"));
-    lines.add("Garrisons return automatically. Terms are rechecked when accepted.");
-    for (int i = page * 7; i < Math.min(lines.size(), page * 7 + 7); i++)
-      wrap(lines.get(i), 280, 780 - (i - page * 7) * 62, 1020, i == lines.size() - 1 ? AtlasApp.MUTED : AtlasApp.WHITE);
-    if (lines.size() > 7) paging(lines.size(), 7);
-    button(
-        "ACCEPT",
-        280,
-        230,
-        300,
-        56,
-        Style.PRIMARY,
-        () -> {
-          boolean accepted = game.answer(viewOffer.id, true);
-          say(accepted ? "Exchange completed." : "Offer expired because its terms changed.", !accepted);
-          modal = Modal.DIPLOMACY;
-        });
-    button(
-        "REJECT",
-        610,
-        230,
-        300,
-        56,
-        Style.DANGER,
-        () -> {
-          game.answer(viewOffer.id, false);
-          modal = Modal.DIPLOMACY;
-        });
-    button(
-        "COUNTER",
-        940,
-        230,
-        300,
-        56,
-        Style.NORMAL,
-        () -> {
-          draft = new GameState.Offer();
-          draft.from = viewOffer.to;
-          draft.to = viewOffer.from;
-          draft.giveTerritories.addAll(viewOffer.wantTerritories);
-          draft.wantTerritories.addAll(viewOffer.giveTerritories);
-          draft.giveSource = viewOffer.wantSource;
-          draft.giveTarget = viewOffer.wantTarget;
-          draft.giveArmies = viewOffer.wantArmies;
-          draft.wantSource = viewOffer.giveSource;
-          draft.wantTarget = viewOffer.giveTarget;
-          draft.wantArmies = viewOffer.giveArmies;
-          draft.openBorders = viewOffer.openBorders;
-          counterId = viewOffer.id;
-          armyPage = false;
-          page = 0;
-          modal = Modal.COMPOSE;
-        });
-  }
-
-  private void compose() {
-    panel("OFFER TO " + game.state.players.get(draft.to).name.toUpperCase(Locale.ROOT));
-    button("TERRITORIES", 280, 770, 480, 48, armyPage ? Style.NORMAL : Style.SELECTED, () -> {
-      armyPage = false;
-      page = 0;
-    });
-    button("ARMIES + OPEN BORDERS", 780, 770, 470, 48, armyPage ? Style.SELECTED : Style.NORMAL, () -> {
-      armyPage = true;
-      page = 0;
-    });
-    if (!armyPage) {
-      List<Integer> own = owned(draft.from), theirs = owned(draft.to);
-      text(app.small, "YOU GIVE", 280, 742, AtlasApp.GOLD);
-      text(app.small, "YOU REQUEST", 780, 742, AtlasApp.GOLD);
-      for (int i = page * 6; i < Math.min(Math.max(own.size(), theirs.size()), page * 6 + 6); i++) {
-        float y = 664 - (i - page * 6) * 62;
-        if (i < own.size()) {
-          int r = own.get(i);
-          button(
-              game.name(r) + "  (" + game.state.armies[r] + ")",
-              280,
-              y,
-              470,
-              draft.giveTerritories.contains(r),
-              () -> toggle(draft.giveTerritories, r));
-        }
-        if (i < theirs.size()) {
-          int r = theirs.get(i);
-          button(
-              game.name(r) + "  (" + game.state.armies[r] + ")",
-              780,
-              y,
-              470,
-              draft.wantTerritories.contains(r),
-              () -> toggle(draft.wantTerritories, r));
-        }
+    String auto = s.phase == SETUP ? "AUTO-PLACE" : "AUTO";
+    if (sameRow) {
+      float ax = x + 4 * (cw + gap) + 4;
+      d.button(auto, ax, top - row, Math.min(220, x + w - ax), row, Draw.Style.NORMAL, this::autoPlace);
+      top -= row + 8;
+      if (canTrade && top - row >= y) {
+        d.button("TRADE CARDS +" + game.nextSetValue(), x, top - row, Math.min(w, 300), row, hand >= 5 ? Draw.Style.PRIMARY : Draw.Style.SELECTED, this::trade);
+        top -= row + 8;
       }
-      paging(Math.max(own.size(), theirs.size()), 6);
     } else {
-      giftEditor(true, 662);
-      giftEditor(false, 450);
-      button(
-          draft.openBorders ? "MUTUAL OPEN BORDERS INCLUDED" : "ADD MUTUAL OPEN BORDERS",
-          280,
-          200,
-          970,
-          draft.openBorders,
-          () -> draft.openBorders = !draft.openBorders);
+      top -= row + 8;
+      float half = (w - 8) / 2;
+      d.button(auto, x, top - row, canTrade ? half : Math.min(w, 220), row, Draw.Style.NORMAL, this::autoPlace);
+      if (canTrade)
+        d.button("TRADE +" + game.nextSetValue(), x + half + 8, top - row, half, row, hand >= 5 ? Draw.Style.PRIMARY : Draw.Style.SELECTED, this::trade);
+      top -= row + 8;
     }
-    button(
-        "SEND OFFER",
-        1050,
-        106,
-        300,
-        56,
-        Style.PRIMARY,
-        () -> {
-          if (counterId < 0) game.sendOffer(draft);
-          else game.counter(counterId, draft);
-          modal = Modal.DIPLOMACY;
-          page = 0;
-          say("Offer sent. The response arrives on your next turn.", false);
-        });
+    int threats = threatCount();
+    if (threats > 0 && top - 14 >= y - 4)
+      d.fit(app.small, "! " + threats + (threats == 1 ? " border is" : " borders are") + " clearly outnumbered (red marks).", x, top - 2, w, ERROR_TEXT);
   }
 
-  private void toggle(List<Integer> values, int r) {
-    if (!values.remove(Integer.valueOf(r))) values.add(r);
-  }
-
-  private void giftEditor(boolean give, float y) {
-    int source = give ? draft.giveSource : draft.wantSource,
-        target = give ? draft.giveTarget : draft.wantTarget;
-    long n = give ? draft.giveArmies : draft.wantArmies;
-    int owner = give ? draft.from : draft.to, receiver = give ? draft.to : draft.from;
-    txt((give ? "SEND ARMIES: " : "REQUEST ARMIES: ") + n, 280, y + 45, AtlasApp.GOLD);
-    button(
-        source < 0 ? "CHOOSE SOURCE" : "FROM " + game.name(source),
-        280,
-        y - 20,
-        470,
-        () ->
-            pick(
-                "ARMY SOURCE",
-                owned(owner),
-                r -> {
-                  if (give) {
-                    draft.giveSource = r;
-                    draft.giveTarget = -1;
-                    draft.giveArmies = 0;
-                  } else {
-                    draft.wantSource = r;
-                    draft.wantTarget = -1;
-                    draft.wantArmies = 0;
-                  }
-                }));
-    button(
-        target < 0 ? "CHOOSE ADJACENT DESTINATION" : "TO " + game.name(target),
-        780,
-        y - 20,
-        470,
-        () -> {
-          if (source < 0) refuse("Choose a source first.");
-          List<Integer> targets = new ArrayList<>();
-          for (int r : game.neighbours(source))
-            if (game.state.owners[r] == receiver) targets.add(r);
-          pick(
-              "ADJACENT DESTINATION",
-              targets,
-              r -> {
-                if (give) draft.giveTarget = r;
-                else draft.wantTarget = r;
-              });
-        });
-    button("−", 280, y - 82, 150, () -> setGift(give, Math.max(0, n - 1)));
-    button("+", 445, y - 82, 150, () -> setGift(give, n + 1));
-    button("+10", 610, y - 82, 150, () -> setGift(give, n + 10));
-    button(
-        "MAX",
-        780,
-        y - 82,
-        470,
-        () -> setGift(give, source < 0 ? 0 : game.state.armies[source] - 1));
-  }
-
-  private void setGift(boolean give, long n) {
-    int source = give ? draft.giveSource : draft.wantSource;
-    if (source < 0) refuse("Choose a source first.");
-    n = Math.min(n, game.state.armies[source] - 1);
-    if (give) draft.giveArmies = n;
-    else draft.wantArmies = n;
-  }
-
-  private List<Integer> owned(int p) {
-    List<Integer> list = new ArrayList<>();
-    for (int r = 0; r < game.state.owners.length; r++) if (game.state.owners[r] == p) list.add(r);
-    return list;
-  }
-
-  private void pick(String title, List<Integer> options, java.util.function.IntConsumer callback) {
-    returnModal = modal;
-    pickTitle = title;
-    picks = options;
-    pickAction = callback;
-    pickPage = 0;
-    modal = Modal.PICK;
-  }
-
-  private void picker() {
-    panel(pickTitle);
-    if (picks.isEmpty()) txt("No eligible territories.", 280, 740, AtlasApp.MUTED);
-    for (int i = pickPage * 18; i < Math.min(picks.size(), pickPage * 18 + 18); i++) {
-      int r = picks.get(i), k = i - pickPage * 18;
-      button(
-          game.name(r) + "  (" + game.state.armies[r] + ")",
-          280 + (k % 3) * 340,
-          720 - (k / 3) * 76,
-          325,
-          () -> {
-            pickAction.accept(r);
-            modal = returnModal;
-          });
+  private void attackArea(float x, float y, float w, float top) {
+    GameState s = game.state;
+    if (from >= 0 && (s.owners[from] != s.active || s.armies[from] < 2)) from = to = -1;
+    if (to >= 0 && (from < 0 || !game.canAttack(from, to))) to = -1;
+    float row = compact ? 40 : 44;
+    if (from < 0) {
+      top -= instruction("Tap a gold-ringed territory to attack from, or tap an enemy to attack it.", x, top, w, AtlasApp.WHITE);
+      if (!compact)
+        d.wrap(app.small, "Done attacking? END ATTACKS moves on to fortifying.", x, top, w, AtlasApp.MUTED);
+      lastRoll(x, y, w);
+      return;
     }
-    button("PREVIOUS", 280, 106, 220, () -> pickPage = Math.max(0, pickPage - 1));
-    button(
-        "NEXT",
-        515,
-        106,
-        220,
-        () -> {
-          if ((pickPage + 1) * 18 < picks.size()) pickPage++;
-        });
-    button("BACK", 1050, 106, 300, () -> modal = returnModal);
+    if (to < 0) {
+      top -= instruction("Attack from " + game.name(from) + " (" + s.armies[from] + "). Pick a target:", x, top, w, AtlasApp.WHITE);
+      List<Integer> targets = new ArrayList<>();
+      for (int n : game.neighbours(from)) if (game.canAttack(from, n)) targets.add(n);
+      targets.sort(Comparator.comparingLong(n -> s.armies[n]));
+      int cols = Math.max(2, Math.min(4, (int) ((w + 6) / 150)));
+      float gap = 6, bw = (w - (cols - 1) * gap) / cols;
+      int rows = Math.max(1, (int) ((top - y + gap) / (row + gap)));
+      int shown = Math.min(targets.size(), cols * rows - 1);
+      for (int i = 0; i <= shown; i++) {
+        float bx = x + (i % cols) * (bw + gap), by = top - row - (i / cols) * (row + gap);
+        if (i == shown) {
+          d.button("CANCEL", bx, by, bw, row, Draw.Style.NORMAL, () -> from = to = -1);
+          break;
+        }
+        int t = targets.get(i);
+        d.button(game.name(t) + " " + s.armies[t], bx, by, bw, row, Draw.Style.NORMAL, () -> to = t);
+        d.token(bx + 9, by + row - 9, 4.5f, playerColor(s.owners[t]));
+      }
+      return;
+    }
+    // Battle: who fights whom, the odds, dice and the roll buttons.
+    BitmapFont f = compact ? app.body : app.gameFont;
+    float lh = compact ? 20 : 26;
+    String left = game.name(from) + " " + s.armies[from], right = game.name(to) + " " + s.armies[to];
+    d.token(x + 7, top - lh / 2, 6, playerColor(s.active));
+    float lw = d.fit(f, left, x + 18, mid(f, top - lh, lh), w * .44f, AtlasApp.WHITE);
+    d.text(app.small, "vs", x + 24 + lw, mid(app.small, top - lh, lh), AtlasApp.MUTED);
+    float rx = x + 46 + lw;
+    d.token(rx + 7, top - lh / 2, 6, playerColor(s.owners[to]));
+    d.fit(f, right, rx + 18, mid(f, top - lh, lh), x + w - rx - 18, AtlasApp.WHITE);
+    top -= lh + 2;
+    double odds = game.conquestChance(from, to);
+    Color oc = odds >= .7 ? GREEN : odds >= .4 ? AtlasApp.GOLD : RED;
+    d.text(app.small, "CHANCE TO CAPTURE WITH BLITZ  ", x, mid(app.small, top - 18, 18), AtlasApp.MUTED);
+    d.text(app.body, Math.round(odds * 100) + "%", x + app.width(app.small, "CHANCE TO CAPTURE WITH BLITZ  "), mid(app.body, top - 18, 18), oc);
+    top -= 24;
+    int maxDice = (int) Math.min(3, s.armies[from] - 1);
+    dice = Math.max(1, Math.min(dice, maxDice));
+    float ds = row - 4;
+    for (int k = 1; k <= 3; k++) {
+      int n = k;
+      float bx = x + (k - 1) * (ds + 6);
+      boolean ok = k <= maxDice;
+      if (k == dice) d.round(bx - 2.5f, top - row - .5f, ds + 5, ds + 5, 8, AtlasApp.GOLD);
+      d.die(bx, top - row + 2, ds, k, ok ? (k == dice ? Draw.PARCHMENT : Color.valueOf("B9B3A3")) : Draw.OFF, ok ? AtlasApp.INK : AtlasApp.MUTED);
+      d.hit(bx, top - row, ds, row, "dice " + k, () -> {
+        if (n > maxDice) refuse("Attacking with " + n + " dice needs " + (n + 1) + " armies.");
+        dice = n;
+      });
+    }
+    float bx = x + 3 * (ds + 6) + 4, rest = x + w - bx;
+    if (compact) {
+      d.button("ROLL", bx, top - row, rest, row, Draw.Style.PRIMARY, () -> roll(false));
+      top -= row + 8;
+      float half = (w - 8) / 2;
+      d.button("BLITZ", x, top - row, half, row, Draw.Style.DANGER, () -> roll(true));
+      d.button("CANCEL", x + half + 8, top - row, half, row, Draw.Style.NORMAL, () -> to = -1);
+      top -= row + 8;
+    } else {
+      float third = (rest - 16) / 3;
+      d.button("ROLL", bx, top - row, third, row, Draw.Style.PRIMARY, () -> roll(false));
+      d.button("BLITZ", bx + third + 8, top - row, third, row, Draw.Style.DANGER, () -> roll(true));
+      d.button("CANCEL", bx + 2 * (third + 8), top - row, third, row, Draw.Style.NORMAL, () -> to = -1);
+      top -= row + 8;
+    }
+    float rh = rollHeight(w);
+    if (top - rh - 6 >= y - 2) lastRoll(x, Math.max(y, top - rh - 6), w);
   }
 
-  private void paging(int count, int perPage) {
-    int pages = Math.max(1, (count + perPage - 1) / perPage);
-    if (pages <= 1) return;
-    button("PREVIOUS", 260, 106, 200, 56, Style.NORMAL, () -> page = Math.max(0, page - 1));
-    button(
-        "NEXT",
-        470,
-        106,
-        200,
-        56,
-        Style.NORMAL,
-        () -> {
-          if ((page + 1) * perPage < count) page++;
-        });
-    text(app.body, "PAGE " + (page + 1) + " / " + pages, 690, 140, AtlasApp.MUTED);
+  private float diceSize() {
+    return compact ? 24 : 28;
   }
 
-  private void settings() {
-    panel("PAUSED");
-    button("RESUME", 480, 650, 640, 64, Style.PRIMARY, this::closeModal);
-    button(
-        "SOUND: " + (soundEnabled ? "ON" : "OFF"),
-        480,
-        566,
-        640,
-        64,
-        Style.NORMAL,
-        () -> {
-          soundEnabled = !soundEnabled;
-          Gdx.app.getPreferences("supremacy-options").putBoolean("sound", soundEnabled).flush();
-        });
-    button("HOW TO PLAY", 480, 482, 640, 64, Style.NORMAL, () -> rules(Modal.SETTINGS));
-    button(
-        "SAVE AND EXIT TO TITLE",
-        480,
-        398,
-        640,
-        64,
-        Style.NORMAL,
-        () -> {
-          if (game != null) saves.save(game);
-          confirmNew = false;
-          modal = Modal.MENU;
-        });
-    wrap(
-        app.body,
-        "The game saves after every action and whenever the app is paused.\n"
-            + "Map: drag to pan, pinch, scroll or the + and - buttons to zoom, FIT to see the whole world.\n"
-            + "Keyboard: Enter = next step, R = roll, B = blitz, Esc = back.",
-        480,
-        320,
-        700,
-        AtlasApp.MUTED);
+  /** Height of the last-roll block: the summary drops below the dice when the panel is narrow. */
+  private float rollHeight(float w) {
+    float step = diceSize() + 5;
+    boolean narrow = w - (5 * step + 16) < app.width(app.small, rollSummary) * .85f;
+    return shownAttack.length == 0 ? 0 : narrow ? diceSize() + 18 : diceSize();
   }
 
-  private void rules(Modal back) {
-    rulesReturn = back;
-    page = 0;
-    modal = Modal.RULES;
+  /** The last roll's dice, with its block's bottom at {@code y}; the loser of each pair is faded. */
+  private void lastRoll(float x, float y, float w) {
+    if (shownAttack.length == 0) return;
+    boolean below = rollHeight(w) > diceSize();
+    float textY = y + 13;
+    if (below) y += 18;
+    boolean rolling = animation > 0;
+    int tick = (int) (clock * 24);
+    int[] a = shownAttack.clone(), def = shownDefend.clone();
+    Arrays.sort(a);
+    Arrays.sort(def);
+    int pairs = Math.min(a.length, def.length);
+    float size = diceSize(), step = size + 5;
+    for (int i = 0; i < a.length; i++) {
+      int v = rolling ? 1 + (tick + i * 3) % 6 : a[a.length - 1 - i];
+      boolean lost = !rolling && i < pairs && a[a.length - 1 - i] <= def[def.length - 1 - i];
+      d.die(x + i * step, y, size, v, lost ? AtlasApp.alpha(RED, .35f) : RED, AtlasApp.WHITE);
+    }
+    float dx = x + 3 * step + 8;
+    for (int i = 0; i < def.length; i++) {
+      int v = rolling ? 1 + (tick + i * 2) % 6 : def[def.length - 1 - i];
+      boolean lost = !rolling && i < pairs && a[a.length - 1 - i] > def[def.length - 1 - i];
+      d.die(dx + i * step, y, size, v, lost ? AtlasApp.alpha(Draw.PARCHMENT, .3f) : Draw.PARCHMENT, AtlasApp.INK);
+    }
+    float sx = dx + 2 * step + 8;
+    if (rolling) return;
+    if (!below) d.fit(app.small, rollSummary, sx, mid(app.small, y, size), x + w - sx, AtlasApp.WHITE);
+    else d.fit(app.small, rollSummary, x, textY, w, AtlasApp.WHITE);
   }
 
-  private void rules() {
-    panel("HOW TO PLAY  ·  " + (page % 4 + 1) + " / 4");
-    String[] pages = {
-      "GOAL\nConquer all "
-          + app.board.regions.size()
-          + " territories. Five commanders share the world; territories are dealt at"
-          + " random and everyone places 55 starting armies.\n\n"
-          + "YOUR TURN\n1  REINFORCE — tap your territories to place new armies.\n2  ATTACK —"
-          + " tap your territory, then an enemy neighbour, then ROLL or BLITZ.\n3  FORTIFY —"
-          + " move armies between your connected territories, then END TURN.",
-      "REINFORCEMENTS\nmax(3, lands ÷ 3) + continent bonuses + your total armies ÷ 5.\n\n"
-          + "CONTINENT BONUSES\nNorth America 9 · Asia 8 · Europe 6 · Africa 5 · Australia 4 ·"
-          + " South America 3 · Middle-East 3. The bonus panel on the map shows who holds each"
-          + " continent.",
-      "BATTLES\nChoose 1–3 attack dice (you need one more army than dice). The defender rolls up to"
-          + " two. Highest dice are compared in pairs; ties go to the defender. BLITZ keeps rolling"
-          + " with maximum dice until you capture the territory or run out of attackers.\n\n"
-          + "After a capture, move at least as many armies as dice rolled; one stays behind.",
-      "CARDS\nCapture at least one territory to draw a card at the end of your turn. Trade three of"
-          + " a kind or one infantry, cavalry and artillery (wilds match anything) for 4, 6, 8, 10,"
-          + " 12, 15, then +5 armies. A card showing land you own gives +2 armies there. With five"
-          + " or more cards you must trade.\n\n"
-          + "DIPLOMACY\nOffer territories, armies or open borders. Open borders let armies pass"
-          + " through allied land while fortifying; it is not a ceasefire."
-    };
-    wrap(pages[page % pages.length], 280, 800, 1040, AtlasApp.WHITE);
-    button("PREVIOUS", 260, 106, 220, 56, Style.NORMAL, () -> page = (page + pages.length - 1) % pages.length);
-    button("NEXT", 490, 106, 220, 56, Style.NORMAL, () -> page = (page + 1) % pages.length);
-    button("BACK", 1130, 106, 220, 56, Style.PRIMARY, this::closeModal);
+  private void occupyArea(float x, float y, float w, float top) {
+    GameState s = game.state;
+    int f = s.occupationFrom, t = s.occupationTo;
+    long max = s.armies[f] - 1, min = s.occupationMinimum;
+    amount = Math.max(min, Math.min(amount, max));
+    float row = compact ? 40 : 44;
+    top -= instruction(game.name(t) + " captured! How many armies move in from " + game.name(f) + "?", x, top, w, AtlasApp.GOLD);
+    d.text(app.small, game.name(f) + " keeps " + (s.armies[f] - amount) + " · " + game.name(t) + " gets " + amount, x, top - 2, AtlasApp.MUTED);
+    top -= 18;
+    d.amount(x, top - row, w, row, amount, min, max, v -> amount = v);
+    top -= row + 8;
+    if (top - row >= y) {
+      float third = (w - 16) / 3;
+      d.button("MIN " + min, x, top - row, third, row, Draw.Style.NORMAL, () -> amount = min);
+      d.button("HALF", x + third + 8, top - row, third, row, Draw.Style.NORMAL, () -> amount = Math.max(min, (max + 1) / 2));
+      d.button("ALL " + max, x + 2 * (third + 8), top - row, third, row, Draw.Style.NORMAL, () -> amount = max);
+      top -= row + 8;
+    }
+    float rh = rollHeight(w);
+    if (top - rh - 6 >= y) lastRoll(x, top - rh - 6, w);
+  }
+
+  private void fortifyArea(float x, float y, float w, float top) {
+    GameState s = game.state;
+    if (from >= 0 && (s.owners[from] != s.active || game.movable(from) <= 0)) from = to = -1;
+    float row = compact ? 40 : 44;
+    if (from < 0) {
+      top -= instruction("Drag armies from one gold-ringed territory onto another (or tap both), then confirm. Or END TURN.", x, top, w, AtlasApp.WHITE);
+      d.wrap(app.small, "Armies travel through your connected land (and allies with open borders). Each army moves once per turn.", x, top, w, AtlasApp.MUTED);
+      return;
+    }
+    if (to < 0) {
+      top -= instruction("Moving from " + game.name(from) + " (" + game.movable(from) + " can move). Tap a highlighted destination.", x, top, w, AtlasApp.WHITE);
+      d.button("CANCEL", x, top - row, Math.min(w, 180), row, Draw.Style.NORMAL, () -> from = to = -1);
+      return;
+    }
+    long max = game.movable(from);
+    amount = Math.max(1, Math.min(amount, max));
+    top -= instruction("From " + game.name(from) + " to " + game.name(to), x, top, w, AtlasApp.WHITE);
+    d.text(app.small, game.name(from) + " keeps " + (s.armies[from] - amount) + " · " + game.name(to) + " will have " + (s.armies[to] + amount), x, top - 2, AtlasApp.MUTED);
+    top -= 18;
+    d.amount(x, top - row, w, row, amount, 1, max, v -> amount = v);
+    top -= row + 8;
+    float half = (w - 8) / 2;
+    d.button("MOVE " + amount, x, top - row, half, row, Draw.Style.SELECTED, this::fortify);
+    d.button("CANCEL", x + half + 8, top - row, half, row, Draw.Style.NORMAL, () -> from = to = -1);
+  }
+
+  // ---------------------------------------------------------------- map overlays
+
+  private void mapOverlay() {
+    float right = mapX + mapW, top = mapY + mapH;
+    float zb = compact ? 40 : 44;
+    if (Gdx.app.getType() != Application.ApplicationType.Android) {
+      d.button("+", right - zb - 8, mapY + 8 + 2 * (zb + 6), zb, zb, Draw.Style.GHOST, () -> app.camera.zoomAt(1.4f, app.camera.x + app.camera.width / 2, app.camera.y + app.camera.height / 2));
+      d.button("−", right - zb - 8, mapY + 8 + zb + 6, zb, zb, Draw.Style.GHOST, () -> app.camera.zoomAt(1 / 1.4f, app.camera.x + app.camera.width / 2, app.camera.y + app.camera.height / 2));
+    }
+    d.button("FIT", right - zb - 8, mapY + 8, zb, zb, Draw.Style.GHOST, () -> app.camera.animateReset());
+    if (game == null) return;
+    if (compact) chips(mapX + 8, top - 40, mapW - 16 - (zb + 8), 34);
+    legend(mapX + 8, mapY + 8);
+    if (!compact && !humanTurn() && game.state.phase != FINISHED) {
+      String m = game.state.players.get(game.state.active).name + " is taking their turn…";
+      float w = app.width(app.gameFont, m) + 40;
+      d.round(mapX + mapW / 2 - w / 2, top - 52, w, 40, 20, AtlasApp.alpha(AtlasApp.INK, .9f));
+      d.center(app.gameFont, m, mapX + mapW / 2, mid(app.gameFont, top - 52, 40), AtlasApp.WHITE);
+    }
+    if (recapOpen && humanTurn() && modal == Modal.NONE) recap(top - (compact ? 46 : 8));
+    else if (inspect >= 0) info(inspect, mapX + 8, top - (compact ? 46 : 8));
+    tooltip();
+    app.drawDrag(); // above every panel, so the armies being carried are never hidden
+  }
+
+  /** Phone roster: one chip per commander along the top of the map. */
+  private void chips(float x, float y, float w, float h) {
+    GameState s = game.state;
+    float gap = 5, cw = Math.min(118, (w - 4 * gap) / 5);
+    for (int p = 0; p < 5; p++) {
+      float cx = x + p * (cw + gap);
+      boolean alive = game.alive(p), active = p == s.active && s.phase != FINISHED;
+      if (active) d.round(cx - 2, y - 2, cw + 4, h + 4, 9, playerColor(p));
+      d.round(cx, y, cw, h, 8, AtlasApp.alpha(AtlasApp.INK, .9f));
+      d.token(cx + 12, y + h / 2, 6.5f, alive ? playerColor(p) : AtlasApp.alpha(AtlasApp.MUTED, .5f));
+      String count = alive ? Integer.toString(game.count(p)) : "OUT";
+      float countW = app.width(app.small, count);
+      d.fit(app.small, s.players.get(p).name, cx + 23, mid(app.small, y, h), cw - 32 - countW, alive ? AtlasApp.WHITE : AtlasApp.MUTED);
+      d.right(app.small, count, cx + cw - 6, mid(app.small, y, h), alive ? AtlasApp.GOLD : AtlasApp.MUTED);
+    }
+    d.hit(x, y, 5 * (cw + gap), h, "commanders", () -> modal = Modal.ROSTER);
+  }
+
+  /** Continent bonuses: tap a row to spotlight that continent on the map. */
+  private void legend(float x, float y) {
+    List<Board.Continent> list = app.board.continents;
+    float w = Math.min(250, mapW - 80), rowH = compact ? Math.min(30, (mapH - 100) / 8) : 28;
+    if (!legendOpen) {
+      d.button("BONUSES", x, y, 110, compact ? 36 : 40, Draw.Style.GHOST, () -> setLegend(true));
+      return;
+    }
+    float h = 34 + list.size() * rowH + 6;
+    d.round(x, y, w, h, 10, AtlasApp.alpha(AtlasApp.INK, .9f));
+    d.text(app.small, "CONTINENT BONUSES", x + 12, y + h - 12, AtlasApp.GOLD);
+    d.right(app.small, "HIDE", x + w - 10, y + h - 12, AtlasApp.MUTED);
+    d.hit(x, y + h - 32, w, 32, "hide bonuses", () -> setLegend(false));
+    GameState s = game.state;
+    int viewer = s.phase == FINISHED ? s.winner : s.active;
+    for (int i = 0; i < list.size(); i++) {
+      Board.Continent c = list.get(i);
+      float ry = y + h - 34 - (i + 1) * rowH;
+      int total = 0, mine = 0, holder = -2;
+      for (int r = 0; r < s.owners.length; r++)
+        if (app.board.regions.get(r).continent == c) {
+          total++;
+          if (s.owners[r] == viewer) mine++;
+          holder = holder == -2 ? s.owners[r] : holder == s.owners[r] ? holder : -1;
+        }
+      if (spotlight == c) d.round(x + 4, ry, w - 8, rowH, 5, Draw.RAISED_HI);
+      d.box(x + 12, ry + rowH / 2 - 5, 10, 10, Color.valueOf(c.color()));
+      d.fit(app.body, c.name(), x + 30, mid(app.body, ry, rowH), w - 120, AtlasApp.WHITE);
+      d.right(app.body, "+" + GameEngine.BONUSES.get(c.name()), x + w - 54, mid(app.body, ry, rowH), AtlasApp.GOLD);
+      if (holder >= 0) d.token(x + w - 22, ry + rowH / 2, 6, playerColor(holder));
+      else if (humanTurn()) d.right(app.small, mine + "/" + total, x + w - 10, mid(app.small, ry, rowH), AtlasApp.MUTED);
+      d.hit(x, ry, w, rowH, "continent " + c.name(), () -> spotlight = spotlight == c ? null : c);
+    }
+  }
+
+  private void setLegend(boolean open) {
+    legendOpen = open;
+    if (!open) spotlight = null;
+    if (!compact) prefs().putBoolean("legendOpen", open).flush();
+  }
+
+  /** What changed while this player was away, with the map outlining losses and gains. */
+  private void recap(float top) {
+    GameState s = game.state;
+    float w = Math.min(mapW - 16 - 60, 540), x = mapX + 8;
+    List<String> lost = new ArrayList<>(), gained = new ArrayList<>();
+    for (int r : recapLost) lost.add(game.name(r));
+    for (int r : recapGained) gained.add(game.name(r));
+    String headline =
+        lost.isEmpty()
+            ? "Your territories held while you were away."
+            : "You lost " + lost.size() + (lost.size() == 1 ? " territory" : " territories") + " while you were away.";
+    String detail = (lost.isEmpty() ? "" : "Lost: " + list(lost) + ". ") + (gained.isEmpty() ? "" : "Gained: " + list(gained) + ".");
+    float tw = w - 24, hh = d.wrapHeight(app.body, headline, tw), dh = detail.isEmpty() ? 0 : d.wrapHeight(app.small, detail, tw) + 6;
+    float h = 14 + hh + dh + 10 + 40 + 10;
+    d.round(x, top - h, w, h, 10, AtlasApp.alpha(lost.isEmpty() ? AtlasApp.INK : ERROR_BG, .95f));
+    d.round(x, top - h, 5, h, 2.5f, lost.isEmpty() ? GREEN : RED);
+    float y = top - 12;
+    d.wrap(app.body, headline, x + 14, y, tw, lost.isEmpty() ? GREEN : ERROR_TEXT);
+    y -= hh + 6;
+    if (!detail.isEmpty()) d.wrap(app.small, detail, x + 14, y, tw, AtlasApp.WHITE);
+    float bw = (w - 24 - 16) / 3, by = top - h + 10;
+    d.button("SHOW", x + 12, by, bw, 40, Draw.Style.NORMAL, () -> {
+      if (!recapLost.isEmpty()) frame(recapLost);
+      else if (!recapGained.isEmpty()) frame(recapGained);
+    });
+    d.button(recapEvents > 0 ? "LOG (" + recapEvents + ")" : "LOG", x + 12 + bw + 8, by, bw, 40, Draw.Style.NORMAL, () -> open(Modal.LOG));
+    d.button("OK", x + 12 + 2 * (bw + 8), by, bw, 40, Draw.Style.PRIMARY, this::dismissRecap);
+    if (s.phase == SETUP) recapOpen = false;
+  }
+
+  private static String list(List<String> names) {
+    if (names.size() <= 4) return String.join(", ", names);
+    return String.join(", ", names.subList(0, 4)) + " and " + (names.size() - 4) + " more";
+  }
+
+  /** Territory details card (long-press, or a tap that is not a move). */
+  private void info(int r, float x, float top) {
+    GameState s = game.state;
+    Board.Region region = app.board.regions.get(r);
+    float w = Math.min(300, mapW - 16 - 60);
+    int owner = s.owners[r];
+    List<Integer> next = new ArrayList<>();
+    for (int n : game.neighbours(r)) next.add(n);
+    int shown = Math.min(next.size(), compact ? 4 : 6);
+    float h = 30 + 22 + 20 + 18 + shown * 19 + (next.size() > shown ? 18 : 0) + 10;
+    d.round(x, top - h, w, h, 10, AtlasApp.alpha(AtlasApp.INK, .95f));
+    d.round(x, top - h, 5, h, 2.5f, playerColor(owner));
+    float y = top - 8;
+    d.fit(app.gameFont, region.name, x + 14, y - 2, w - 60, AtlasApp.WHITE);
+    d.button("CLOSE", x + w - 70, top - 40, 64, 34, Draw.Style.NORMAL, () -> inspect = -1);
+    y -= 30;
+    d.token(x + 20, y - 7, 6, playerColor(owner));
+    d.fit(app.body, s.players.get(owner).name + " · " + s.armies[r] + (s.armies[r] == 1 ? " army" : " armies"), x + 32, y, w - 46, playerColor(owner));
+    y -= 22;
+    int holder = -2, mine = 0, total = 0;
+    for (int i = 0; i < s.owners.length; i++)
+      if (app.board.regions.get(i).continent == region.continent) {
+        total++;
+        if (s.owners[i] == owner) mine++;
+        holder = holder == -2 ? s.owners[i] : holder == s.owners[i] ? holder : -1;
+      }
+    String continent = region.continent.name() + " +" + GameEngine.BONUSES.get(region.continent.name())
+        + (holder >= 0 ? " · held by " + s.players.get(holder).name : " · owner has " + mine + "/" + total);
+    d.fit(app.small, continent, x + 14, y, w - 28, AtlasApp.MUTED);
+    y -= 20;
+    d.text(app.small, "BORDERS", x + 14, y, AtlasApp.GOLD);
+    y -= 18;
+    next.sort(Comparator.comparingLong(n -> -s.armies[n]));
+    for (int i = 0; i < shown; i++) {
+      int n = next.get(i);
+      d.token(x + 20, y - 6, 4.5f, playerColor(s.owners[n]));
+      d.fit(app.small, game.name(n) + " — " + s.players.get(s.owners[n]).name + " (" + s.armies[n] + ")", x + 30, y, w - 44, AtlasApp.WHITE);
+      y -= 19;
+    }
+    if (next.size() > shown) d.text(app.small, "+" + (next.size() - shown) + " more", x + 30, y, AtlasApp.MUTED);
+  }
+
+  private void tooltip() {
+    if (game == null
+        || app.hovered == null
+        || modal != Modal.NONE
+        || !app.pointerMoved
+        || Gdx.app.getType() != Application.ApplicationType.Desktop) return;
+    GameState s = game.state;
+    int r = app.board.regions.indexOf(app.hovered);
+    String line1 = app.hovered.name,
+        line2 = s.players.get(s.owners[r]).name + " · " + s.armies[r] + (s.armies[r] == 1 ? " army" : " armies"),
+        line3 = app.hovered.continent.name() + " (+" + GameEngine.BONUSES.get(app.hovered.continent.name()) + ")";
+    float w = Math.max(app.width(app.body, line1), Math.max(app.width(app.body, line2), app.width(app.small, line3))) + 28;
+    float x = Math.min(app.mouse.x + 18, mapX + mapW - w - 4), y = Math.max(app.mouse.y - 14, mapY + 76);
+    d.round(x, y - 70, w, 70, 8, AtlasApp.alpha(AtlasApp.INK, .94f));
+    d.box(x, y - 70, 4, 70, playerColor(s.owners[r]));
+    d.text(app.body, line1, x + 14, y - 9, AtlasApp.WHITE);
+    d.text(app.body, line2, x + 14, y - 30, playerColor(s.owners[r]));
+    d.text(app.small, line3, x + 14, y - 51, AtlasApp.MUTED);
+  }
+
+  private void drawToast() {
+    float age = clock - toastAt;
+    if (toast.isEmpty() || age > 3.5f) return;
+    float a = MathUtils.clamp(3.5f - age, 0, 1);
+    float maxW = (modal == Modal.NONE ? mapW : app.W) - 32;
+    float w = Math.min(maxW, app.width(app.body, toast) + 44);
+    float cx = modal == Modal.NONE ? mapX + mapW / 2 : app.W / 2;
+    float y = modal == Modal.NONE ? (compact ? mapY + 56 : mapY + 14) : app.H - 58;
+    d.round(cx - w / 2, y, w, 40, 20, AtlasApp.alpha(toastError ? ERROR_BG : AtlasApp.INK, .95f * a));
+    d.round(cx - w / 2, y, 6, 40, 3, AtlasApp.alpha(toastError ? RED : AtlasApp.GOLD, a));
+    d.fitCenter(app.body, toast, cx, mid(app.body, y, 40), w - 32, AtlasApp.alpha(toastError ? ERROR_TEXT : AtlasApp.WHITE, a));
+  }
+
+  // ---------------------------------------------------------------- modals and lifecycle
+
+  void open(Modal next) {
+    if (next == Modal.SETTINGS || next == Modal.MENU) {
+      modal = next;
+      return;
+    }
+    if (game == null) return;
+    if (next == Modal.LOG) {
+      screens.openLog();
+      return;
+    }
+    if (!humanTurn()) {
+      if (next == Modal.CARDS || next == Modal.DIPLOMACY) say("Wait for your turn: cards and offers are private.", false);
+      return;
+    }
+    if (animation > 0) return;
+    modal = next;
+    screens.page = 0;
+    cards.clear();
   }
 
   void pause() {
     if (game != null) {
-      try {
-        saves.save(game);
-      } catch (RuntimeException e) {
-        say(e.getMessage(), true);
-      }
-      if (humanTurn() && hotseat() && modal != Modal.MENU) modal = Modal.HANDOVER;
+      saveNow();
+      if (humanTurn() && hotseat() && modal != Modal.MENU && modal != Modal.PLAYER) modal = Modal.HANDOVER;
     }
   }
 
   void back() {
     if (modal == Modal.HANDOVER) return;
     if (modal == Modal.NONE) {
-      if (humanTurn() && (from >= 0 || to >= 0) && game.state.phase != OCCUPY) from = to = -1;
+      if (inspect >= 0 || spotlight != null) {
+        inspect = -1;
+        spotlight = null;
+      } else if (humanTurn() && (from >= 0 || to >= 0) && game.state.phase != OCCUPY) from = to = -1;
       else modal = Modal.SETTINGS;
-    } else if (modal != Modal.MENU) closeModal();
+    } else screens.close();
     cards.clear();
   }
 
   void dispose() {
-    if (diceSound != null) diceSound.dispose();
-    if (winSound != null) winSound.dispose();
+    waitForSaves();
+    saver.shutdown();
+    for (Sound s : new Sound[] {diceSound, winSound, placeSound, victorySound, defeatSound}) if (s != null) s.dispose();
   }
 }

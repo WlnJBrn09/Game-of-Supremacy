@@ -4,10 +4,22 @@ android {
     namespace 'com.supremacy.android'
     compileSdk 35
     buildToolsVersion "35.0.0"
-    defaultConfig { applicationId 'com.supremacy.game'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.2.1' }
+    defaultConfig { applicationId 'com.supremacy.game'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.3.0' }
     compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17; coreLibraryDesugaringEnabled true }
     sourceSets.main { assets.srcDirs = ['../src/main/resources']; jniLibs.srcDirs = [layout.buildDirectory.dir('generated/natives')] }
-    buildTypes { release { minifyEnabled false } }
+    // Release signing comes from CI secrets; without them only the debug APK is built.
+    def keystore = System.getenv('SUPREMACY_KEYSTORE')
+    signingConfigs {
+        release {
+            if (keystore) {
+                storeFile file(keystore)
+                storePassword System.getenv('SUPREMACY_STORE_PASSWORD')
+                keyAlias System.getenv('SUPREMACY_KEY_ALIAS')
+                keyPassword System.getenv('SUPREMACY_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes { release { minifyEnabled false; if (keystore) signingConfig signingConfigs.release } }
 }
 dependencies {
     implementation project(':core')

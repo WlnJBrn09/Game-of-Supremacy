@@ -74,7 +74,7 @@ public final class BotStrategy {
           }
         }
         if (s.reserve > 0) {
-          int target = bestDeployment();
+          int target = bestDeployment(s.difficulty.ordinal() < 2, null);
           // Allocate in batches so threatened bonus borders and campaign fronts both get troops.
           long batch = s.difficulty.ordinal() < 2 ? s.reserve : Math.max(1, s.reserve / 4);
           game.deploy(target, batch);
@@ -205,7 +205,48 @@ public final class BotStrategy {
             : 0);
   }
 
-  private int bestDeployment() {
+  /**
+   * Where the active player could place their whole reserve, using the planning of the stronger
+   * bots without randomness. Plans for whoever is active, so humans can use it as a suggestion. The
+   * board is left unchanged.
+   */
+  public Placement suggestDeployment() {
+    GameState s = game.state;
+    if ((s.phase != SETUP && s.phase != REINFORCE) || s.reserve <= 0)
+      return new Placement(new int[0], new long[0]);
+    String objective = s.players.get(s.active).objective;
+    if (objective == null || objective.isEmpty()) chooseObjective();
+    long[] original = s.armies.clone(), placed = new long[s.owners.length];
+    Map<Integer, Long> plan = new LinkedHashMap<>();
+    try {
+      // Small batches with diminishing returns spread a large reserve over several fronts.
+      long left = s.reserve, batch = Math.max(1, (left + 5) / 6);
+      while (left > 0) {
+        int target = bestDeployment(false, placed);
+        long n = Math.min(batch, left);
+        s.armies[target] += n;
+        placed[target] += n;
+        plan.merge(target, n, Long::sum);
+        left -= n;
+      }
+    } finally {
+      s.armies = original;
+      s.players.get(s.active).objective = objective == null ? "" : objective;
+    }
+    int[] regions = new int[plan.size()];
+    long[] amounts = new long[plan.size()];
+    int i = 0;
+    for (var e : plan.entrySet()) {
+      regions[i] = e.getKey();
+      amounts[i++] = e.getValue();
+    }
+    return new Placement(regions, amounts);
+  }
+
+  /** A deployment plan: {@code amounts[i]} armies on {@code regions[i]}. */
+  public record Placement(int[] regions, long[] amounts) {}
+
+  private int bestDeployment(boolean noise, long[] placed) {
     GameState s = game.state;
     int best = -1;
     double value = -Double.MAX_VALUE;
@@ -220,7 +261,8 @@ public final class BotStrategy {
                   .continent
                   .name()
                   .equals(s.players.get(s.active).objective)) score += 8;
-        if (s.difficulty.ordinal() < 2) score += game.random(20);
+        if (noise) score += game.random(20);
+        if (placed != null) score -= placed[r] * .6;
         if (score > value) {
           value = score;
           best = r;

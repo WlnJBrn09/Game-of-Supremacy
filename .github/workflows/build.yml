@@ -1,0 +1,106 @@
+name: Build and test
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0"
+      - name: Rules tests and debug APK
+        run: ./gradlew --no-daemon :core:test :android:assembleDebug
+      - name: Signed release APK (only when signing secrets are configured)
+        if: env.SUPREMACY_KEYSTORE_BASE64 != ''
+        env:
+          SUPREMACY_KEYSTORE_BASE64: ${{ secrets.SUPREMACY_KEYSTORE_BASE64 }}
+          SUPREMACY_STORE_PASSWORD: ${{ secrets.SUPREMACY_STORE_PASSWORD }}
+          SUPREMACY_KEY_ALIAS: ${{ secrets.SUPREMACY_KEY_ALIAS }}
+          SUPREMACY_KEY_PASSWORD: ${{ secrets.SUPREMACY_KEY_PASSWORD }}
+        run: |
+          echo "$SUPREMACY_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          SUPREMACY_KEYSTORE="$RUNNER_TEMP/release.jks" ./gradlew --no-daemon :android:assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: android/build/outputs/apk/**/*.apk
+
+  screenshot-tour:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+      - name: Desktop build
+        run: ./mvnw -B -ntp package -DskipTests
+      - name: Screenshot tour at phone, small phone, tablet and desktop sizes
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb > /dev/null
+          tools/screenshot_tour.sh target/tour
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshot-tour
+          path: target/tour
+
+  android-emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on an emulated phone (Pixel 6, Android 14)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: tools/android_smoke.sh "$(ls apk/debug/*.apk | head -1)" target/android
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-screenshots
+          path: target/android
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, android-emulator]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: apk
+          path: apk
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: apk/**/*.apk
