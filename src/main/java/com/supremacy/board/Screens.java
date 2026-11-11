@@ -1027,12 +1027,12 @@ final class Screens {
 
   private static final String[] RULES = {
     "GOAL\nConquer every territory. Five commanders share the world; territories are dealt at random and everyone places their starting armies.",
-    "YOUR TURN\n1 PLACE: tap your gold-ringed territories. Choose how many each tap places, or AUTO.\n2 ATTACK: tap your territory, then an enemy neighbour, then ROLL or BLITZ.\n3 MOVE: shift armies between your connected territories, then END TURN.",
+    "YOUR TURN\n1 PLACE: tap your gold-ringed territories. Choose how many each tap places, or AUTO.\n2 ATTACK: tap your territory, then an enemy neighbour, then ROLL or BLITZ.\n3 MOVE: drag armies between your connected territories (or tap both), then END TURN.",
     "REINFORCEMENTS\nmax(3, territories ÷ 3) + continent bonuses + population bonus (one army per five you have on the board, unless switched off).\n\nCONTINENT BONUSES\nNorth America 9 · Asia 8 · Europe 6 · Africa 5 · Australia 4 · South America 3 · Middle-East 3.",
     "BATTLES\nAttack with 1–3 dice (you need one more army than dice). The defender rolls up to two. Highest dice are compared in pairs; ties go to the defender. BLITZ keeps rolling until you capture the territory or run out of attackers. After a capture, move in at least as many armies as dice rolled.",
     "CARDS\nCapture a territory during your turn to draw a card. Trade three of a kind, or one of each type (wilds match anything), for 4, 6, 8, 10, 12, 15, then +5 armies. A card showing land you own adds +2 there. With five or more cards you must trade.",
     "DIPLOMACY\nOffer territories, armies or open borders to another commander. Open borders let armies pass through allied land while moving; it is not a ceasefire.",
-    "MAP TIPS\nRed ! marks your borders where an enemy stack clearly outnumbers you. Hold a territory for details. Tap a continent in BONUSES to spotlight it. UNDO takes back placements and moves until you roll dice."
+    "MAP TIPS\nRed ! marks your borders where an enemy stack clearly outnumbers you. While moving armies, drag from a territory's army badge onto a connected one of yours; drag anywhere else to pan. Hold a territory for details. Tap a continent in BONUSES to spotlight it. UNDO takes back placements and moves until you roll dice."
   };
 
   private void rules() {
@@ -1048,7 +1048,7 @@ final class Screens {
   private static final String[] TUTORIAL = {
     "1 · PLACE ARMIES\nTerritories with a gold ring are yours. Tap them to add armies: pick 1, 3, 5 or ALL per tap, or let AUTO place them for you. UNDO takes a placement back.",
     "2 · ATTACK\nTap one of your territories, then an enemy neighbour (or just tap the enemy). ROLL fights one round; BLITZ fights until the territory falls. The win chance is shown before you commit.",
-    "3 · MOVE AND END\nAfter attacking, move armies between your connected territories, then END TURN. Capturing at least one territory earns a card; sets of cards trade for extra armies."
+    "3 · MOVE AND END\nAfter attacking, drag armies from one of your territories onto a connected one (or tap both) and confirm, then END TURN. Capturing at least one territory earns a card; sets of cards trade for extra armies."
   };
 
   private void tutorial() {

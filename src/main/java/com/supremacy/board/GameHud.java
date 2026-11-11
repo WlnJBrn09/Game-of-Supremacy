@@ -101,6 +101,11 @@ final class GameHud {
   Board.Continent spotlight;
   boolean legendOpen;
 
+  // Dragging armies between territories (fortify phase).
+  int dragFrom = -1, dragOver = -1;
+  float dragX, dragY;
+  boolean dragValid;
+
   // Computer-turn playback.
   private float botTimer, nextDelay;
   boolean skipping, resultShown, watching;
@@ -440,6 +445,7 @@ final class GameHud {
         return r == s.occupationTo ? Role.TARGET : Role.DIM;
       }
       case FORTIFY -> {
+        if (dragFrom >= 0 && dragValid && r == dragOver) return Role.TARGET;
         if (from < 0) return own && game.movable(r) > 0 ? Role.HINT : Role.NORMAL;
         if (r == from) return Role.SOURCE;
         if (r == to) return Role.TARGET;
@@ -676,6 +682,61 @@ final class GameHud {
     } finally {
       Gdx.graphics.requestRendering();
     }
+  }
+
+  // ---------------------------------------------------------------- dragging armies
+
+  /** True when a drag starting on this territory's badge may carry armies out of it. */
+  boolean canDragFrom(int r) {
+    if (!interactive() || game.state.phase != FORTIFY) return false;
+    GameState s = game.state;
+    return s.owners[r] == s.active && game.movable(r) > 0;
+  }
+
+  void dragBegin(int r) {
+    dragFrom = from = r;
+    to = -1;
+    inspect = -1;
+    dragOver = -1;
+    dragValid = false;
+    haptic(10);
+  }
+
+  /** Follows the finger; {@code over} is the territory under it, or -1. */
+  void dragMove(float x, float y, int over) {
+    if (dragFrom < 0) return;
+    dragX = x;
+    dragY = y;
+    dragOver = over;
+    dragValid = over >= 0 && over != dragFrom && game.state.owners[over] == game.state.active
+        && game.connected(dragFrom, over, game.state.active);
+  }
+
+  void dragCancel() {
+    dragFrom = dragOver = -1;
+    dragValid = false;
+  }
+
+  /**
+   * Drops the armies on {@code over}. A valid drop selects the move (all movable armies, adjustable
+   * with the slider) to be confirmed with MOVE, so a stray drag never moves anything by itself.
+   */
+  void dragEnd(int over) {
+    int source = dragFrom;
+    dragCancel();
+    if (source < 0 || !interactive() || over < 0 || over == source) return;
+    GameState s = game.state;
+    if (s.owners[over] != s.active) {
+      say("You can only move armies onto your own territories.", true);
+    } else if (!game.connected(source, over, s.active)) {
+      say(game.name(over) + " is not connected to " + game.name(source) + " through your land.", true);
+    } else {
+      from = source;
+      to = over;
+      amount = game.movable(source);
+      haptic(15);
+    }
+    Gdx.graphics.requestRendering();
   }
 
   void tapOcean() {
@@ -1297,7 +1358,7 @@ final class GameHud {
     GameState s = game.state;
     float row = Math.min(36, (h - 18) / 5);
     float top = y + h;
-    d.text(app.small, "COMMANDERS", x + 4, top - 2, AtlasApp.MUTED);
+    d.text(app.small, w < 300 ? "PLAYERS" : "COMMANDERS", x + 4, top - 2, AtlasApp.MUTED);
     float cLands = x + w - 112, cArmies = x + w - 52, cCards = x + w - 6;
     d.right(app.small, "LANDS", cLands, top - 2, AtlasApp.MUTED);
     d.right(app.small, "ARMIES", cArmies, top - 2, AtlasApp.MUTED);
@@ -1555,7 +1616,7 @@ final class GameHud {
     if (from >= 0 && (s.owners[from] != s.active || game.movable(from) <= 0)) from = to = -1;
     float row = compact ? 40 : 44;
     if (from < 0) {
-      top -= instruction("Tap a territory to move armies from, or END TURN.", x, top, w, AtlasApp.WHITE);
+      top -= instruction("Drag armies from one gold-ringed territory onto another (or tap both), then confirm. Or END TURN.", x, top, w, AtlasApp.WHITE);
       d.wrap(app.small, "Armies travel through your connected land (and allies with open borders). Each army moves once per turn.", x, top, w, AtlasApp.MUTED);
       return;
     }
@@ -1598,6 +1659,7 @@ final class GameHud {
     if (recapOpen && humanTurn() && modal == Modal.NONE) recap(top - (compact ? 46 : 8));
     else if (inspect >= 0) info(inspect, mapX + 8, top - (compact ? 46 : 8));
     tooltip();
+    app.drawDrag(); // above every panel, so the armies being carried are never hidden
   }
 
   /** Phone roster: one chip per commander along the top of the map. */

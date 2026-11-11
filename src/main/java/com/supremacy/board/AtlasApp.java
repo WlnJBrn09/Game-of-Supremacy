@@ -260,6 +260,31 @@ public final class AtlasApp extends ApplicationAdapter {
         drawCounters();
         unclip();
     }
+    /** Armies being dragged: a line from the source badge to the finger and a token carrying the count. */
+    void drawDrag(){
+        if(hud==null||hud.game==null||hud.dragFrom<0)return;
+        clip(camera.x,camera.y,camera.width,camera.height);
+        var state=hud.game.state;
+        float r=tokenRadius()*1.15f;
+        int f=hud.dragFrom;
+        float x1=badgeScreenX(f),y1=badgeScreenY(f),x2=hud.dragX,y2=hud.dragY,gx=x2,gy=y2+r*1.9f;
+        Color c=hud.dragValid?GOLD:alpha(WHITE,.8f);
+        begin();
+        line(x1,y1,x2,y2,5.5f,alpha(INK,.85f));line(x1,y1,x2,y2,3,c);
+        Color owner=Color.valueOf(state.color(state.owners[f]));
+        shapes.setColor(alpha(Color.BLACK,.4f));shapes.circle(gx+1,gy-2.5f,r+1.5f,24);
+        shapes.setColor(hud.dragValid?GOLD:INK);shapes.circle(gx,gy,r+2.5f,24);
+        shapes.setColor(INK);shapes.circle(gx,gy,r+1,24);
+        shapes.setColor(new Color(owner).mul(.68f,.68f,.68f,1));shapes.circle(gx,gy,r,24);
+        shapes.setColor(new Color(owner).lerp(WHITE,.1f));shapes.circle(gx,gy,r*.83f,24);
+        shapes.end();
+        batch.begin();
+        scaleFont(counter,r/9.5f);
+        centered(counter,armyText(hud.game.movable(f)),gx,gy+counter.getCapHeight()/2,Color.WHITE);
+        scaleFont(counter,1);
+        batch.end();
+        unclip();
+    }
     /** Badge radius grows with zoom so pieces stay legible without hiding the map. */
     float tokenRadius(){return MathUtils.clamp(8.5f+3.4f*(camera.zoom-1),8.5f,19);}
     private static String armyText(long n){return n>=100000?n/1000+"k":Long.toString(n);}
@@ -478,6 +503,18 @@ public final class AtlasApp extends ApplicationAdapter {
         return nearest;
     }
 
+    /** The territory whose army badge is under a screen point (a drag source), or -1. */
+    int pickBadge(float x,float y){
+        if(hud==null||hud.game==null||!camera.inside(x,y))return -1;
+        float reach=tokenRadius()+(Gdx.app.getType()==Application.ApplicationType.Android?10:5);
+        int best=-1;float distance=reach*reach;
+        for(int i=0;i<board.regions.size();i++){
+            float dx=badgeScreenX(i)-x,dy=badgeScreenY(i)-y,d=dx*dx+dy*dy;
+            if(d<distance){best=i;distance=d;}
+        }
+        return best;
+    }
+
     /** Presses the control drawn last frame with this label (scripted tours and tests). */
     boolean press(String label){
         for(int i=hits.size()-1;i>=0;i--)if(label.equals(hits.get(i).label)){hits.get(i).action.run();Gdx.graphics.requestRendering();return true;}
@@ -500,28 +537,33 @@ public final class AtlasApp extends ApplicationAdapter {
     private class Controls extends InputAdapter {
         private final Vector2[] fingers={new Vector2(),new Vector2()};
         private final boolean[] down={false,false};
-        private boolean zoomGesture,panning,longFired;
+        private boolean zoomGesture,panning,longFired,armyDrag;
+        private int dragRegion=-1;
         private float pinchDistance,downX,downY,lastX,lastY,dragDistance,downAt,vx,vy,lastMoveAt;
         private float lastTapAt=-9,lastTapX,lastTapY;
         private Slider dragging;
 
         Controls(){}
         boolean down(){return down[0]||down[1];}
-        boolean dragging(){return panning||zoomGesture||dragging!=null;}
+        boolean dragging(){return panning||zoomGesture||armyDrag||dragging!=null;}
         private float now(){return hud==null?0:hud.time();}
         private Vector2 point(int x,int y){return new Vector2(x/ui,H-y/ui);}
         @Override public boolean touchDown(int x,int y,int pointer,int button) {
             Vector2 p=point(x,y);
             Gdx.graphics.requestRendering();
-            if(pointer<2){fingers[pointer].set(p);down[pointer]=true;if(down[0]&&down[1]){zoomGesture=true;dragging=null;pinchDistance=fingers[0].dst(fingers[1]);return true;}}
+            if(pointer<2){fingers[pointer].set(p);down[pointer]=true;if(down[0]&&down[1]){zoomGesture=true;dragging=null;cancelArmyDrag();pinchDistance=fingers[0].dst(fingers[1]);return true;}}
             if(pointer>0)return true;
             downX=lastX=p.x;downY=lastY=p.y;dragDistance=0;downAt=now();longFired=false;panning=false;vx=vy=0;
             press.set(p);
             camera.stop();
             dragging=null;
             for(int i=sliders.size()-1;i>=0;i--)if(sliders.get(i).rect().contains(p)){dragging=sliders.get(i);dragging.update(p.x);break;}
+            // A touch that starts on the badge of a territory whose armies can be moved may become a drag.
+            cancelArmyDrag();
+            if(dragging==null&&!hud.blocksBoard()&&!onHit(p.x,p.y)){int r=pickBadge(p.x,p.y);if(r>=0&&hud.canDragFrom(r))dragRegion=r;}
             return true;
         }
+        private void cancelArmyDrag(){if(armyDrag)hud.dragCancel();armyDrag=false;dragRegion=-1;}
         @Override public boolean touchDragged(int x,int y,int pointer) {
             Vector2 p=point(x,y);
             if(pointer<2)fingers[pointer].set(p);
@@ -529,6 +571,10 @@ public final class AtlasApp extends ApplicationAdapter {
             if(zoomGesture||pointer>0)return true;
             if(dragging!=null){dragging.update(p.x);return true;}
             dragDistance=Math.max(dragDistance,Vector2.dst(downX,downY,p.x,p.y));
+            if(dragRegion>=0){
+                if(!armyDrag&&dragDistance>8){armyDrag=true;hud.dragBegin(dragRegion);}
+                if(armyDrag){Board.Region over=pick(p.x,p.y);hud.dragMove(p.x,p.y,over==null?-1:board.regions.indexOf(over));lastX=p.x;lastY=p.y;return true;}
+            }
             if(!hud.blocksBoard()&&camera.inside(downX,downY)&&!onHit(downX,downY)&&dragDistance>8){
                 panning=true;camera.pan(p.x-lastX,p.y-lastY);
                 float dt=Math.max(.008f,now()-lastMoveAt);
@@ -543,6 +589,13 @@ public final class AtlasApp extends ApplicationAdapter {
             if(zoomGesture){if(!down[0]&&!down[1])zoomGesture=false;return true;}
             if(pointer>0)return true;
             if(dragging!=null){dragging=null;return true;}
+            if(armyDrag){
+                Vector2 p=point(x,y);Board.Region over=pick(p.x,p.y);
+                armyDrag=false;dragRegion=-1;
+                hud.dragEnd(over==null?-1:board.regions.indexOf(over));
+                return true;
+            }
+            dragRegion=-1;
             if(panning){panning=false;if(now()-lastMoveAt<.08f)camera.fling(vx,vy);return true;}
             if(longFired||dragDistance>8)return true;
             Vector2 p=point(x,y);

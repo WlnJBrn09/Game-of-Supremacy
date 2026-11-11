@@ -98,6 +98,41 @@ public final class ScreenshotTour extends ApplicationAdapter {
     fail("no control starting with '" + prefix + "'; visible: " + app.labels());
   }
 
+  private int px(float units) {
+    return Math.round(units * app.ui);
+  }
+
+  private int py(float units) {
+    return Math.round((app.H - units) * app.ui);
+  }
+
+  /** A badge that is on the map and not covered by any control, so a finger can reach it. */
+  private boolean reachable(int region) {
+    float x = app.badgeScreenX(region), y = app.badgeScreenY(region);
+    if (!app.camera.visible(x, y, 14)) return false;
+    for (AtlasApp.Hit h : app.hits) {
+      com.badlogic.gdx.math.Rectangle r = h.rect();
+      if (x > r.x - 16 && x < r.x + r.width + 16 && y > r.y - 16 && y < r.y + r.height + 16) return false;
+    }
+    return true;
+  }
+
+  private float dragEndX, dragEndY;
+
+  /** Presses on region {@code a}'s badge and drags to {@code b}'s, leaving the finger down. */
+  private void beginDrag(int a, int b) {
+    InputProcessor in = Gdx.input.getInputProcessor();
+    float x0 = app.badgeScreenX(a), y0 = app.badgeScreenY(a);
+    dragEndX = app.badgeScreenX(b);
+    dragEndY = app.badgeScreenY(b);
+    in.touchDown(px(x0), py(y0), 0, 0);
+    for (int i = 1; i <= 10; i++) in.touchDragged(px(x0 + (dragEndX - x0) * i / 10f), py(y0 + (dragEndY - y0) * i / 10f), 0);
+  }
+
+  private void finishDrag() {
+    Gdx.input.getInputProcessor().touchUp(px(dragEndX), py(dragEndY), 0, 0);
+  }
+
   /** The active player's territory with the most armies that borders an enemy. */
   private int frontier() {
     GameState s = s();
@@ -307,23 +342,86 @@ public final class ScreenshotTour extends ApplicationAdapter {
       expect(hud().modal == GameHud.Modal.NONE, "dialogs close back to the game");
       if (s().phase == ATTACK) press("END ATTACKS");
     });
+    int[] pair = {-1, -1};
     then(() -> {
       expect(s().phase == FORTIFY, "fortify after attacks");
-      int from = -1, to = -1;
-      for (int a = 0; a < s().owners.length && to < 0; a++)
-        if (s().owners[a] == s().active && hud().game.movable(a) > 0)
-          for (int b = 0; b < s().owners.length; b++)
-            if (b != a && s().owners[b] == s().active && hud().game.connected(a, b, s().active)) {
-              from = a;
-              to = b;
-              break;
+      // The bonus panel covers part of the map; a player who needs that land hides it.
+      if (app.labels().contains("hide bonuses")) press("hide bonuses");
+      app.camera.animateReset();
+    });
+    until("the map to settle", () -> !app.camera.moving(), 100);
+    then(() -> {
+      // Two neighbouring territories of ours whose badges are on the map and not under a panel
+      // (the bonus panel rightly takes touches), as far apart on screen as possible.
+      float best = 0;
+      for (int a = 0; a < s().owners.length; a++)
+        if (s().owners[a] == s().active && hud().game.movable(a) > 0 && reachable(a))
+          for (int b : hud().game.neighbours(a))
+            if (s().owners[b] == s().active && reachable(b)
+                && Math.abs(app.board.regions.get(a).anchor.x - app.board.regions.get(b).anchor.x) < 600) {
+              float d = com.badlogic.gdx.math.Vector2.dst(app.badgeScreenX(a), app.badgeScreenY(a), app.badgeScreenX(b), app.badgeScreenY(b));
+              if (d > best) {
+                best = d;
+                pair[0] = a;
+                pair[1] = b;
+              }
             }
-      if (from >= 0) {
-        app.tapRegion(from);
-        app.tapRegion(to);
+      if (pair[0] < 0 || best <= 16) {
+        StringBuilder why = new StringBuilder();
+        for (int a = 0; a < s().owners.length; a++)
+          if (s().owners[a] == s().active) {
+            float x = app.badgeScreenX(a), y = app.badgeScreenY(a);
+            why.append("\n  ").append(hud().game.name(a)).append(" movable=").append(hud().game.movable(a)).append(String.format(" badge=(%.0f,%.0f) visible=%b", x, y, app.camera.visible(x, y, 14)));
+            for (AtlasApp.Hit h : app.hits) {
+              com.badlogic.gdx.math.Rectangle r = h.rect();
+              if (x > r.x - 16 && x < r.x + r.width + 16 && y > r.y - 16 && y < r.y + r.height + 16) why.append(" covered by '").append(h.label()).append("' ").append(r);
+            }
+          }
+        fail("two reachable neighbouring territories to drag armies between (screen " + app.W + "x" + app.H + ", zoom " + app.camera.zoom + ")" + why);
       }
     });
-    then(() -> shot("24-fortify"));
+    // 1. Drag onto an enemy territory: refused, nothing selected as a destination.
+    then(() -> {
+      if (pair[0] < 0) return;
+      int enemy = -1;
+      for (int n : hud().game.neighbours(pair[0])) if (s().owners[n] != s().active && reachable(n)) enemy = n;
+      if (enemy < 0) return;
+      beginDrag(pair[0], enemy);
+    });
+    then(() -> {
+      if (pair[0] < 0) return;
+      if (hud().dragFrom >= 0) {
+        expect(hud().dragFrom == pair[0], "a drag from a movable badge carries armies instead of panning");
+        finishDrag();
+      }
+    });
+    then(() -> expect(hud().to < 0, "dropping armies on an enemy territory selects nothing"));
+    // 2. Drag onto a connected territory of ours: the move is selected.
+    then(() -> {
+      if (pair[0] >= 0) beginDrag(pair[0], pair[1]);
+    });
+    then(() -> {
+      expect(hud().dragFrom == pair[0] && hud().dragValid, "hovering a connected territory marks it as a valid drop");
+      shot("24a-drag");
+      finishDrag();
+    });
+    then(() -> {
+      expect(hud().from == pair[0] && hud().to == pair[1], "dropping on a connected territory selects the move");
+      expect(hud().dragFrom < 0, "the drag ends on release");
+      shot("24-fortify");
+    });
+    // 3. A drag that starts away from badges still pans the map.
+    then(() -> {
+      app.camera.zoomAt(2f, app.camera.x + app.camera.width / 2, app.camera.y + app.camera.height / 2);
+      InputProcessor in = Gdx.input.getInputProcessor();
+      int x0 = px(app.camera.x + 4), y0 = py(app.camera.y + 4);
+      in.touchDown(x0, y0, 0, 0);
+      for (int i = 1; i <= 8; i++) in.touchDragged(x0 + i * 12, y0, 0);
+      expect(hud().dragFrom < 0, "a drag that starts on empty map does not carry armies");
+      in.touchUp(x0 + 96, y0, 0, 0);
+      app.camera.animateReset();
+    });
+    until("the map to settle", () -> !app.camera.moving(), 100);
     then(() -> {
       if (app.labels().stream().anyMatch(l -> l.startsWith("MOVE "))) pressStarting("MOVE ");
     });
