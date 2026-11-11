@@ -594,6 +594,7 @@ public final class AtlasApp extends ApplicationAdapter {
     }
 
     @Override public void pause(){if(hud!=null)hud.pause();}
-    @Override public void resume(){Gdx.graphics.requestRendering();}
+    // FreeType font textures are not restored automatically if Android drops the GL context.
+    @Override public void resume(){fontUi=-1;measure(Gdx.graphics.getWidth(),Gdx.graphics.getHeight());badgeScale=-1;Gdx.graphics.requestRendering();}
     @Override public void dispose(){hud.dispose();for(BitmapFont f:fonts)f.dispose();shapes.dispose();batch.dispose();pixel.dispose();mesh.dispose();}
 }

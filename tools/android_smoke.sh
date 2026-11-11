@@ -9,16 +9,25 @@ pkg=com.supremacy.game
 activity=$pkg/com.supremacy.android.AndroidLauncher
 shot() { adb exec-out screencap -p > "$out/$1.png"; echo "saved $1.png"; }
 alive() { [ -n "$(adb shell pidof $pkg | tr -d '\r')" ]; }
+# On failure, put the evidence in the job log itself (artifacts are not always reachable).
+fail() {
+  echo "FAILED: $1"
+  adb logcat -d > "$out/logcat.txt" || true
+  echo "---- crash ----"; grep -A40 "FATAL EXCEPTION" "$out/logcat.txt" | head -80 || true
+  echo "---- app and libGDX log ----"; grep -iE "AndroidRuntime|supremacy|libgdx|GdxRuntime|AndroidGraphics|EGL|OpenGL" "$out/logcat.txt" | tail -60 || true
+  exit 1
+}
 
 adb install -r "$apk"
 adb logcat -c
 adb shell am start -W -n "$activity"
 sleep 10; shot 01-title
-alive || { echo "app is not running after launch"; adb logcat -d > "$out/logcat.txt"; exit 1; }
+alive || fail "app is not running after launch"
 
 adb shell am force-stop $pkg
 adb shell am start -W -n "$activity" --es demo play
 sleep 10; shot 02-new-match
+alive || fail "app is not running after starting a match"
 # Tap the middle of the map area a few times; taps on land place armies or open territory details.
 read -r w h < <(adb shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)
 long=$(( w > h ? w : h )); short=$(( w > h ? h : w ))
@@ -30,8 +39,6 @@ adb shell am start -W -n "$activity" --es demo autoplay
 for i in 1 2 3 4 5 6; do sleep 15; shot "04-autoplay-$i"; alive || break; done
 
 adb logcat -d > "$out/logcat.txt"
-if grep -E "FATAL EXCEPTION|AndroidRuntime" "$out/logcat.txt" | grep -q .; then
-  echo "crash found in logcat:"; grep -A20 "FATAL EXCEPTION" "$out/logcat.txt" | head -60; exit 1
-fi
-alive || { echo "app stopped during autoplay"; exit 1; }
+grep -q "FATAL EXCEPTION" "$out/logcat.txt" && fail "crash found in logcat"
+alive || fail "app stopped during autoplay"
 echo "android smoke test passed"
